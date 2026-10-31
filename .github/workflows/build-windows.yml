@@ -1,0 +1,60 @@
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GSP_CLIENT_ID: ${{ secrets.GSP_CLIENT_ID }}
+      GSP_CLIENT_SECRET: ${{ secrets.GSP_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build portable app
+        run: |
+          set -o pipefail
+          gradle createDistributable --console=plain 2>&1 | tee build.log
+
+      - name: Show compile errors
+        if: failure()
+        run: |
+          {
+            echo '## Compile errors'
+            echo '```'
+            grep -E '^e: |error:|FAILED|What went wrong' -A3 build.log | head -80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Zip portable app
+        run: 7z a Gsheet_Plus_Windows_v0.1_portable.zip build/compose/binaries/main/app/Gsheet_Plus
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gsheet_Plus_Windows_v0.1_portable
+          path: Gsheet_Plus_Windows_v0.1_portable.zip
+
+      - name: Build installer (.msi)
+        continue-on-error: true
+        run: gradle packageMsi --console=plain
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Gsheet_Plus_Windows_v0.1_installer
+          path: build/compose/binaries/main/msi/*.msi
+          if-no-files-found: ignore
