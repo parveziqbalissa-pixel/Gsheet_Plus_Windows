@@ -56,6 +56,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
@@ -68,6 +69,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -123,6 +126,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     var colorRow by remember { mutableStateOf<Long?>(null) }
     var attachTarget by remember { mutableStateOf<Pair<Long, GridColumn>?>(null) }
     var historyOpen by remember { mutableStateOf(false) }
+    var widthColumn by remember { mutableStateOf<GridColumn?>(null) }
     var mediaPaste by remember { mutableStateOf<Triple<GridColumn, Long, PastedMedia>?>(null) }
     var moreMenu by remember { mutableStateOf(false) }
     val liveWidths = remember { mutableStateMapOf<Long, Int>() }
@@ -387,6 +391,12 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
                                 onMove = { d -> c.edit(tableId) { c.ws.moveColumn(tableId, col.id, d) } },
                                 onStyle = { styleColumn = col },
                                 onSettings = { editingColumn = col },
+                                onWidth = { widthColumn = col },
+                                onAutoFit = {
+                                    val w = autoWidth(col, shown.rows)
+                                    liveWidths[col.id] = w
+                                    c.ws.setColumnWidth(tableId, col.id, w)
+                                },
                                 onDelete = { deletingColumn = col },
                                 onSelect = {
                                     if (ordered.isNotEmpty()) sel = Sel(ordered.first().id, col.id, ordered.last().id, col.id)
@@ -539,6 +549,15 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             { mediaPaste = null; media.cleanUp() },
         )
     }
+    widthColumn?.let { col ->
+        NameDialog("Column width", "Width (60 to 800)", "Save", (liveWidths[col.id] ?: col.width).toString(), { text ->
+            widthColumn = null
+            text.trim().toIntOrNull()?.coerceIn(60, 800)?.let { w ->
+                liveWidths[col.id] = w
+                c.ws.setColumnWidth(tableId, col.id, w)
+            }
+        }, { widthColumn = null })
+    }
     if (historyOpen) {
         HistoryDialog(
             c.ws.conflicts(tableId),
@@ -559,12 +578,15 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
 private fun HeaderCell(
     col: GridColumn, width: Int, sortDirection: SortDirection?, filtered: Boolean, grouped: Boolean,
     onSort: (SortDirection?) -> Unit, onFilter: () -> Unit, onGroup: () -> Unit, onPin: () -> Unit, onMove: (Int) -> Unit,
-    onStyle: () -> Unit, onSettings: () -> Unit, onDelete: () -> Unit, onSelect: () -> Unit,
+    onStyle: () -> Unit, onSettings: () -> Unit, onWidth: () -> Unit, onAutoFit: () -> Unit, onDelete: () -> Unit, onSelect: () -> Unit,
     onResize: (Int) -> Unit, onResizeEnd: (Int) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     val density = LocalDensity.current.density
     var dragWidth by remember { mutableStateOf(0f) }
+    val currentWidth by rememberUpdatedState(width)
+    val resize by rememberUpdatedState(onResize)
+    val resizeEnd by rememberUpdatedState(onResizeEnd)
     val subtitle = buildString {
         append(col.type.label)
         if (col.readOnly && col.type != ColumnType.CALC) append(" · Formula")
@@ -582,16 +604,16 @@ private fun HeaderCell(
             Text(subtitle, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Box(
-            Modifier.align(Alignment.CenterEnd).width(10.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-                .pointerInput(width) {
+            Modifier.align(Alignment.CenterEnd).width(12.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                .pointerInput(Unit) {
                     detectHorizontalDragGestures(
-                        onDragStart = { dragWidth = width.toFloat() },
-                        onDragEnd = { onResizeEnd(dragWidth.roundToInt()) },
-                        onDragCancel = { onResizeEnd(dragWidth.roundToInt()) },
+                        onDragStart = { dragWidth = currentWidth.toFloat() },
+                        onDragEnd = { resizeEnd(dragWidth.roundToInt()) },
+                        onDragCancel = { resizeEnd(dragWidth.roundToInt()) },
                         onHorizontalDrag = { change, delta ->
                             change.consume()
                             dragWidth = (dragWidth + delta / density).coerceIn(60f, 800f)
-                            onResize(dragWidth.roundToInt())
+                            resize(dragWidth.roundToInt())
                         },
                     )
                 },
@@ -606,6 +628,8 @@ private fun HeaderCell(
             DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; onMove(-1) })
             DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; onMove(1) })
             DropdownMenuItem(text = { Text("Select column") }, onClick = { menu = false; onSelect() })
+            DropdownMenuItem(text = { Text("Column width...") }, onClick = { menu = false; onWidth() })
+            DropdownMenuItem(text = { Text("Fit width to content") }, onClick = { menu = false; onAutoFit() })
             DropdownMenuItem(text = { Text("Colors and font") }, onClick = { menu = false; onStyle() })
             DropdownMenuItem(text = { Text("Column settings / rename") }, onClick = { menu = false; onSettings() })
             DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
@@ -660,12 +684,16 @@ private fun DataRow(
                 textAlign = if (col.isNumeric) TextAlign.End else TextAlign.Start,
             )
             val isEditing = editing == (row.id to col.id)
+            val target = if (isEditing) null else linkOf(col, value)
             Box(
                 Modifier.pin(col.pinned, hs).width(widthOf(col).dp).height(CellHeight)
                     .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant).background(background)
                     .onPointerEvent(PointerEventType.Press) { event ->
                         if (event.buttons.isSecondaryPressed) onRightClick(col.id)
-                        else if (event.buttons.isPrimaryPressed) onPress(col.id, event.keyboardModifiers.isShiftPressed)
+                        else if (event.buttons.isPrimaryPressed) {
+                            if (target != null && event.keyboardModifiers.isCtrlPressed) openLink(target)
+                            else onPress(col.id, event.keyboardModifiers.isShiftPressed)
+                        }
                     }
                     .onPointerEvent(PointerEventType.Enter) { event ->
                         if (event.buttons.isPrimaryPressed) onDrag(col.id)
@@ -697,7 +725,8 @@ private fun DataRow(
                     }
                     else -> Text(
                         text = if (value.isEmpty() || !col.isNumeric) value.replace('\n', ' ') else col.prefix + value + col.suffix,
-                        style = style.copy(color = if (col.locked) textColor.copy(alpha = 0.75f) else textColor),
+                        style = if (target != null) style.copy(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline)
+                        else style.copy(color = if (col.locked) textColor.copy(alpha = 0.75f) else textColor),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -709,6 +738,12 @@ private fun DataRow(
                             }
                             if (col.listItems.isEmpty()) DropdownMenuItem(text = { Text("No items - see Column settings") }, onClick = onCloseMenu)
                         } else {
+                            if (target != null) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isPhoneLink(target)) "Call (open phone app)" else if (target.startsWith("mailto:")) "Send email" else "Open link  (Ctrl+click)") },
+                                    onClick = { onCloseMenu(); openLink(target) },
+                                )
+                            }
                             DropdownMenuItem(text = { Text("Copy  (Ctrl+C)") }, onClick = { onCloseMenu(); onMenuCopy() })
                             DropdownMenuItem(text = { Text("Paste  (Ctrl+V)") }, enabled = !col.locked && canPaste(), onClick = { onCloseMenu(); onMenuPaste() })
                             if (!col.locked && !col.type.isAttachment) {
