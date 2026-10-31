@@ -76,8 +76,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.DragData
-import androidx.compose.ui.onExternalDrag
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.awtTransferable
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import java.awt.Desktop
@@ -343,14 +345,24 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
         c.openPage(grid.name + " map", mapHtml(grid.name, places))
     }
 
-    @OptIn(ExperimentalComposeUiApi::class)
-    @Suppress("DEPRECATION")
-    val dropModifier = Modifier.onExternalDrag(onDrop = { value ->
-        val data = value.dragData
-        if (data is DragData.FilesList) {
-            dropFiles(data.readFiles().mapNotNull { runCatching { java.io.File(URI(it)) }.getOrNull() })
+    // Files dragged from Explorer onto the window go into the selected cell.
+    val dropNow by rememberUpdatedState<(List<java.io.File>) -> Unit>({ files -> dropFiles(files) })
+    val dropTarget = remember {
+        object : DragAndDropTarget {
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                val transfer = event.awtTransferable
+                if (!transfer.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.javaFileListFlavor)) return false
+                @Suppress("UNCHECKED_CAST")
+                val files = runCatching {
+                    transfer.getTransferData(java.awt.datatransfer.DataFlavor.javaFileListFlavor) as List<java.io.File>
+                }.getOrNull().orEmpty()
+                if (files.isEmpty()) return false
+                dropNow(files)
+                return true
+            }
         }
-    })
+    }
+    val dropModifier = Modifier.dragAndDropTarget(shouldStartDragAndDrop = { true }, target = dropTarget)
 
     Column(Modifier.fillMaxSize().then(dropModifier)) {
         // ----- top bar -----

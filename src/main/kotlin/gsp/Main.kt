@@ -29,7 +29,7 @@ import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
 
 object Version {
-    const val NAME = "0.8"
+    const val NAME = "0.8.1"
 }
 
 fun main() = application {

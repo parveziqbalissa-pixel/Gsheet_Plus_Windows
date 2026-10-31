@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.gsheetplus"
-version = "0.8.0"
+version = "0.8.1"
 
 dependencies {
     implementation(compose.desktop.currentOs)
