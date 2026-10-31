@@ -20,6 +20,7 @@ class Controller(private val scope: CoroutineScope) {
     val auth = GoogleAuth()
     val api = SheetsApi(auth)
     val engine = SyncEngine(ws, api)
+    val attachmentSync = AttachmentSync(ws, GoogleAttachments(auth, api))
 
     val toast = mutableStateOf<Toast?>(null)
     val syncing = mutableStateOf(false)
@@ -90,8 +91,17 @@ class Controller(private val scope: CoroutineScope) {
             syncing.value = true
             try {
                 val result = engine.sync(tableId)
+                var uploadError: String? = null
+                try {
+                    attachmentSync.run(tableId)
+                } catch (e: NotSignedIn) {
+                    throw e
+                } catch (e: Exception) {
+                    uploadError = explain(e, "Pictures and files")
+                }
                 status.value = "Synced " + java.time.LocalTime.now().withNano(0)
-                if (announce || result.conflicts > 0) say(result.message())
+                if (uploadError != null) say(uploadError)
+                else if (announce || result.conflicts > 0) say(result.message())
             } catch (e: NotSignedIn) {
                 signedIn.value = false
                 status.value = "Sign in to sync"

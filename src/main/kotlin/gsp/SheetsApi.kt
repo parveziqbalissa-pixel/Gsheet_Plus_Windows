@@ -95,24 +95,32 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
         val dates = HashSet<Int>()
         val validations = HashMap<Int, SheetValidation>()
         runCatching {
+            // Look at the first 100 data rows: the first filled cell of a column shows its date format or dropdown.
             val grid = call(
                 "GET",
-                "$base?ranges=${enc(range + "!2:2")}&includeGridData=true&fields=" +
-                    enc("sheets(properties.gridProperties,data.rowData.values(effectiveFormat.numberFormat.type,dataValidation))"),
+                "$base?ranges=${enc(range + "!2:101")}&includeGridData=true&fields=" +
+                    enc("sheets(properties.gridProperties,data.rowData.values(effectiveFormat.numberFormat.type,dataValidation,formattedValue))"),
                 null,
             )
             val sheet = grid["sheets"].arr()?.firstOrNull().obj()
-            val cells = sheet?.get("data").arr()?.firstOrNull().obj()?.get("rowData").arr()?.firstOrNull().obj()?.get("values").arr().orEmpty()
-            cells.forEachIndexed { c, cell ->
-                val o = cell.obj() ?: return@forEachIndexed
-                val nf = o["effectiveFormat"].obj()?.get("numberFormat").obj()?.get("type").text()
-                if (nf == "DATE" || nf == "DATE_TIME") dates += c
-                val cond = o["dataValidation"].obj()?.get("condition").obj()
-                when (cond?.get("type").text()) {
-                    "BOOLEAN" -> validations[c] = SheetValidation(true, emptyList())
-                    "ONE_OF_LIST" -> {
+            val rowData = sheet?.get("data").arr()?.firstOrNull().obj()?.get("rowData").arr().orEmpty()
+            val seen = HashSet<Int>()
+            for (rd in rowData) {
+                val cells = rd.obj()?.get("values").arr().orEmpty()
+                cells.forEachIndexed { c, cell ->
+                    val o = cell.obj() ?: return@forEachIndexed
+                    if (c in seen) return@forEachIndexed
+                    val filled = o["formattedValue"].text().isNotEmpty()
+                    val nf = o["effectiveFormat"].obj()?.get("numberFormat").obj()?.get("type").text()
+                    val cond = o["dataValidation"].obj()?.get("condition").obj()
+                    val kind = cond?.get("type").text()
+                    if (kind == "BOOLEAN") {
+                        validations[c] = SheetValidation(true, emptyList()); seen += c
+                    } else if (kind == "ONE_OF_LIST") {
                         val items = cond?.get("values").arr().orEmpty().map { it.obj()?.get("userEnteredValue").text() }.filter { it.isNotEmpty() }
-                        if (items.isNotEmpty()) validations[c] = SheetValidation(false, items)
+                        if (items.isNotEmpty()) { validations[c] = SheetValidation(false, items); seen += c }
+                    } else if (filled && (nf == "DATE" || nf == "DATE_TIME")) {
+                        dates += c; seen += c
                     }
                 }
             }

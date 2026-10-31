@@ -76,6 +76,8 @@ class TableData(val id: Long, var name: String) {
     val deletedRowUuids = ArrayList<String>()
     val deletedColumnNames = ArrayList<String>()
     val conflicts = ArrayList<Conflict>()
+    /** Cells whose pictures or links changed and must be redrawn in the Sheet (not saved to disk). */
+    val staleCells = HashSet<Pair<Long, Long>>()
     var nextId = 1L
     fun newId(): Long = nextId++
 
@@ -509,6 +511,7 @@ class Workspace(val dir: Path) {
         val table = find(tableId) ?: return@synchronized
         val a = table.attachments.firstOrNull { it.id == attachmentId } ?: return@synchronized
         table.attachments.remove(a)
+        table.staleCells += a.rowId to a.columnId
         a.localPath?.let { runCatching { Files.deleteIfExists(Path.of(it)) } }
         table.rows.firstOrNull { it.id == a.rowId }?.let { row ->
             val lines = attachmentLinks(row.values[a.columnId].orEmpty()).filter { it != a.name }

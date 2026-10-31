@@ -135,10 +135,12 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                 val plan = SheetImport.plan(values, read.dateColumns, read.validations, formulaColumns)
                 for (i in toCreate) {
                     val p = plan.columns.getOrNull(i) ?: continue
+                    // A column with a "<name> preview" column next to it holds pictures.
+                    val kind = if (p.type == ColumnType.TEXT && header.contains(previewHeader(p.name))) ColumnType.PICTURE else p.type
                     val col = Col(
-                        table.newId(), p.name, p.type, readOnly = p.readOnly, listItems = p.listItems,
+                        table.newId(), p.name, kind, readOnly = p.readOnly, listItems = p.listItems,
                         sheetName = header[i],
-                        sig = columnSig(p.type, p.listItems),
+                        sig = columnSig(kind, p.listItems),
                     )
                     table.columns += col
                     sheetIndex[col.id] = i
