@@ -58,11 +58,10 @@ fun mimeOf(file: File): String = java.net.URLConnection.guessContentTypeFromName
 
 /** Small pictures for the attachment list: the local file if it is on this PC, otherwise Google's thumbnail. */
 object Thumbs {
-    private val cache = java.util.concurrent.ConcurrentHashMap<Long, ImageBitmap>()
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, ImageBitmap>()
     private val http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build()
 
-    private fun scaled(image: BufferedImage): BufferedImage {
-        val max = 400
+    private fun scaled(image: BufferedImage, max: Int): BufferedImage {
         if (image.width <= max) return image
         val h = (image.height * (max.toDouble() / image.width)).toInt().coerceAtLeast(1)
         val out = BufferedImage(max, h, BufferedImage.TYPE_INT_ARGB)
@@ -73,38 +72,41 @@ object Thumbs {
         return out
     }
 
-    fun load(a: Attachment): ImageBitmap? {
-        cache[a.id]?.let { return it }
+    /** [max] is the widest the picture is kept (small for table cells, large for the picture window). */
+    fun load(a: Attachment, max: Int = 400): ImageBitmap? {
+        val key = "${a.id}:$max"
+        cache[key]?.let { return it }
         val image: BufferedImage? = runCatching {
             val local = a.localPath?.let { File(it) }?.takeIf { it.exists() }
             if (local != null) {
                 ImageIO.read(local)
             } else {
                 a.driveId?.let { id ->
-                    val request = HttpRequest.newBuilder(URI("https://drive.google.com/thumbnail?id=$id&sz=w400")).build()
+                    val request = HttpRequest.newBuilder(URI("https://drive.google.com/thumbnail?id=$id&sz=w$max")).build()
                     val response = http.send(request, HttpResponse.BodyHandlers.ofByteArray())
                     if (response.statusCode() == 200) ImageIO.read(ByteArrayInputStream(response.body())) else null
                 }
             }
         }.getOrNull()
-        val bitmap = image?.let { scaled(it).toComposeImageBitmap() } ?: return null
-        cache[a.id] = bitmap
+        val bitmap = image?.let { scaled(it, max).toComposeImageBitmap() } ?: return null
+        cache[key] = bitmap
         return bitmap
     }
 }
 
 /** A picture's preview (or the file type for other files). [picture] treats files without a known type as pictures. */
 @Composable
-fun AttachmentThumb(a: Attachment, size: androidx.compose.ui.unit.Dp, picture: Boolean, onClick: (() -> Unit)? = null) {
+fun AttachmentThumb(a: Attachment, size: androidx.compose.ui.unit.Dp, picture: Boolean, onClick: (() -> Unit)? = null, fit: Boolean = false) {
+    val maxPx = if (size > 120.dp) 1000 else 400
     val isImage = a.mime.startsWith("image/") || (picture && a.mime == "application/octet-stream")
     val bitmap by produceState<ImageBitmap?>(null, a.id, a.driveId, a.localPath) {
-        if (isImage) value = withContext(Dispatchers.IO) { Thumbs.load(a) }
+        if (isImage) value = withContext(Dispatchers.IO) { Thumbs.load(a, maxPx) }
     }
     val base = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant)
     Box(if (onClick != null) base.clickable { onClick() } else base, contentAlignment = Alignment.Center) {
         val image = bitmap
         if (image != null) {
-            Image(bitmap = image, contentDescription = a.name, contentScale = ContentScale.Crop, modifier = Modifier.size(size))
+            Image(bitmap = image, contentDescription = a.name, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.size(size))
         } else {
             Text(
                 if (!isImage) a.name.substringAfterLast('.', "file").uppercase().take(5) else "...",
@@ -150,12 +152,12 @@ fun AttachmentDialog(c: Controller, tableId: Long, rowId: Long, column: GridColu
         onDismissRequest = onDismiss,
         title = { Text(column.name) },
         text = {
-            Column(Modifier.width(520.dp)) {
+            Column(Modifier.width(760.dp)) {
                 if (items.isEmpty()) Text("Nothing here yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                LazyColumn(Modifier.heightIn(max = 600.dp)) {
                     items(items, key = { it.id }) { a ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AttachmentThumb(a, 84.dp, column.type == ColumnType.PICTURE) { open(a) }
+                            AttachmentThumb(a, 260.dp, column.type == ColumnType.PICTURE || column.type == ColumnType.SIGNATURE, onClick = { open(a) }, fit = true)
                             Column(Modifier.weight(1f)) {
                                 Text(a.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Text(
