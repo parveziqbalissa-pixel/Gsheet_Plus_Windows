@@ -498,7 +498,15 @@ class Workspace(val dir: Path) {
             val row = table.rows.firstOrNull { it.id == rid } ?: continue
             for (cid in columnIds) {
                 val col = table.columns.firstOrNull { it.id == cid } ?: continue
-                if (col.readOnly || col.type == ColumnType.CALC || col.type.isAttachment) continue
+                if (col.readOnly || col.type == ColumnType.CALC) continue
+                if (col.type.isAttachment) {
+                    // The files stay on disk so that a cut can still be pasted.
+                    val gone = table.attachments.filter { it.rowId == rid && it.columnId == cid }
+                    table.attachments.removeAll(gone.toSet())
+                    table.staleCells += rid to cid
+                    if (row.values.remove(cid) != null || gone.isNotEmpty()) cleared++
+                    continue
+                }
                 row.values.remove(cid)
                 cleared++
             }

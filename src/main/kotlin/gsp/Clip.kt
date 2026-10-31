@@ -107,3 +107,54 @@ object CellClipboard {
         }
     }
 }
+
+/** Pictures or files taken from the PC's clipboard. [temporary] files are deleted after they have been added. */
+class PastedMedia(val paths: List<java.nio.file.Path>, val temporary: Boolean) {
+    val allImages: Boolean get() = paths.all { mimeFromName(it.fileName.toString()).startsWith("image/") }
+    fun cleanUp() {
+        if (temporary) paths.forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
+    }
+}
+
+object SystemClipboard {
+    private fun board() = Toolkit.getDefaultToolkit().systemClipboard
+
+    private fun hasText(): Boolean = runCatching { board().isDataFlavorAvailable(DataFlavor.stringFlavor) }.getOrDefault(false)
+
+    /** Cheap check (looks at the kinds of data only). Text wins over an image, because copying cells from Excel also offers a picture. */
+    fun hasMedia(): Boolean = runCatching {
+        board().isDataFlavorAvailable(DataFlavor.javaFileListFlavor) ||
+            (board().isDataFlavorAvailable(DataFlavor.imageFlavor) && !hasText())
+    }.getOrDefault(false)
+
+    /** Files copied in Explorer, or a picture (screenshot, image copied from a browser) saved to a temporary PNG. */
+    fun readMedia(): PastedMedia? = runCatching {
+        val b = board()
+        if (b.isDataFlavorAvailable(DataFlavor.javaFileListFlavor)) {
+            @Suppress("UNCHECKED_CAST")
+            val files = (b.getData(DataFlavor.javaFileListFlavor) as? List<java.io.File>).orEmpty().filter { it.isFile }
+            if (files.isNotEmpty()) return@runCatching PastedMedia(files.map { it.toPath() }, false)
+        }
+        if (b.isDataFlavorAvailable(DataFlavor.imageFlavor) && !hasText()) {
+            val image = b.getData(DataFlavor.imageFlavor) as? java.awt.Image ?: return@runCatching null
+            val width = image.getWidth(null)
+            val height = image.getHeight(null)
+            if (width <= 0 || height <= 0) return@runCatching null
+            val buffered = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+            val g = buffered.createGraphics()
+            g.color = java.awt.Color.WHITE
+            g.fillRect(0, 0, width, height)
+            g.drawImage(image, 0, 0, null)
+            g.dispose()
+            val dir = java.nio.file.Files.createTempDirectory("gsp-paste")
+            val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"))
+            val file = dir.resolve("Pasted image $stamp.png")
+            javax.imageio.ImageIO.write(buffered, "png", file.toFile())
+            return@runCatching PastedMedia(listOf(file), true)
+        }
+        null
+    }.getOrNull()
+}
+
+/** Whether Paste can do something: cells copied in the app, text, or a picture or files from the PC. */
+fun canPaste(): Boolean = CellClipboard.resolve() != null || SystemClipboard.hasMedia()

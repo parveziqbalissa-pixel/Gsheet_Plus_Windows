@@ -123,6 +123,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     var colorRow by remember { mutableStateOf<Long?>(null) }
     var attachTarget by remember { mutableStateOf<Pair<Long, GridColumn>?>(null) }
     var historyOpen by remember { mutableStateOf(false) }
+    var mediaPaste by remember { mutableStateOf<Triple<GridColumn, Long, PastedMedia>?>(null) }
     var moreMenu by remember { mutableStateOf(false) }
     val liveWidths = remember { mutableStateMapOf<Long, Int>() }
     val aggregates = remember { mutableStateMapOf<Long, Aggregate>() }
@@ -172,7 +173,30 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
         c.say(if (rows.size == 1 && cols.size == 1) "Copied cell" else "Copied ${rows.size * cols.size} cells")
     }
 
+    fun pasteMedia(col: GridColumn, rowId: Long, media: PastedMedia) {
+        var added = 0
+        var skipped = 0
+        for (p in media.paths) {
+            val mime = mimeFromName(p.fileName.toString())
+            if (!attachmentFits(mime, col)) { skipped++; continue }
+            if (c.edit(tableId) { c.ws.addAttachmentFile(tableId, rowId, col.id, p, mime) }) added++ else skipped++
+        }
+        media.cleanUp()
+        c.say(if (added > 0) "Pasted $added ${if (added == 1) "item" else "items"}" + (if (skipped > 0) ", skipped $skipped" else "") else "Nothing fits this column")
+    }
+
     fun pasteAtSelection() {
+        val active = sel
+        if (active != null) {
+            val media = SystemClipboard.readMedia()
+            if (media != null) {
+                val col = columns.firstOrNull { it.id == active.endCol }
+                if (col == null) { media.cleanUp(); return }
+                if (col.locked) { media.cleanUp(); c.say("This column cannot be edited."); return }
+                if (col.type.isAttachment) pasteMedia(col, active.endRow, media) else mediaPaste = Triple(col, active.endRow, media)
+                return
+            }
+        }
         val (rows, cols) = block() ?: return
         val copied = CellClipboard.resolve() ?: return
         val r0 = ordered.indexOfFirst { it.id == rows.first().id }
@@ -500,6 +524,21 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     attachTarget?.let { (rowId, col) ->
         AttachmentDialog(c, tableId, rowId, col, attachments.filter { it.rowId == rowId && it.columnId == col.id }, { attachTarget = null })
     }
+    mediaPaste?.let { (col, rowId, media) ->
+        val target = if (media.allImages) ColumnType.PICTURE else ColumnType.FILE
+        val what = if (media.allImages) "picture" else "file"
+        ConfirmDialog(
+            "Change column?",
+            "\"${col.name}\" is a ${col.type.label} column. Change it to ${target.label} and paste ${media.paths.size} $what(s) here? Text already in the column stays as names.",
+            "Change and paste",
+            {
+                mediaPaste = null
+                c.edit(tableId) { c.ws.updateColumn(tableId, col.id, col.name, target, col.prefix, col.suffix, col.defaultValue, col.listItems, col.formula) }
+                pasteMedia(col.copy(type = target), rowId, media)
+            },
+            { mediaPaste = null; media.cleanUp() },
+        )
+    }
     if (historyOpen) {
         HistoryDialog(
             c.ws.conflicts(tableId),
@@ -671,7 +710,7 @@ private fun DataRow(
                             if (col.listItems.isEmpty()) DropdownMenuItem(text = { Text("No items - see Column settings") }, onClick = onCloseMenu)
                         } else {
                             DropdownMenuItem(text = { Text("Copy  (Ctrl+C)") }, onClick = { onCloseMenu(); onMenuCopy() })
-                            DropdownMenuItem(text = { Text("Paste  (Ctrl+V)") }, enabled = !col.locked && CellClipboard.resolve() != null, onClick = { onCloseMenu(); onMenuPaste() })
+                            DropdownMenuItem(text = { Text("Paste  (Ctrl+V)") }, enabled = !col.locked && canPaste(), onClick = { onCloseMenu(); onMenuPaste() })
                             if (!col.locked && !col.type.isAttachment) {
                                 DropdownMenuItem(text = { Text("Edit  (Enter)") }, onClick = { onCloseMenu(); onMenuEdit(col.id) })
                                 DropdownMenuItem(text = { Text("Clear  (Delete)") }, onClick = { onCloseMenu(); onMenuClear() })
