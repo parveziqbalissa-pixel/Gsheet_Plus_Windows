@@ -41,13 +41,14 @@ fun convertForColumn(cell: ClipCell, column: GridColumn): String? {
         ColumnType.TIME -> if (value.isEmpty()) "" else value.takeIf { runCatching { LocalTime.parse(it) }.isSuccess }
         ColumnType.CHECKBOX -> value.lowercase().takeIf { it.isEmpty() || it == "true" || it == "false" }
         ColumnType.LIST -> value.takeIf { it.isEmpty() || it in column.listItems }
-        ColumnType.PICTURE, ColumnType.FILE, ColumnType.AUDIO, ColumnType.CALC -> null
+        ColumnType.RATING -> if (value.isEmpty()) "" else parseNumber(value)?.takeIf { it in 0.0..5.0 }?.let { formatNumber(Math.round(it).toDouble()) }
+        ColumnType.PICTURE, ColumnType.FILE, ColumnType.AUDIO, ColumnType.CALC, ColumnType.SIGNATURE -> null
     }
 }
 
 /** Whether a copied attachment of [mime] can go into [column]. */
 fun attachmentFits(mime: String, column: GridColumn): Boolean = !column.locked && when (column.type) {
-    ColumnType.PICTURE -> mime.startsWith("image/")
+    ColumnType.PICTURE, ColumnType.SIGNATURE -> mime.startsWith("image/")
     ColumnType.AUDIO -> mime.startsWith("audio/")
     ColumnType.FILE -> true
     else -> false

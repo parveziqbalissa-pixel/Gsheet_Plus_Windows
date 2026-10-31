@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.gsheetplus"
-version = "0.5.0"
+version = "0.8.0"
 
 dependencies {
     implementation(compose.desktop.currentOs)
@@ -49,13 +49,15 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Gsheet_Plus"
-            packageVersion = "1.0.0"
+            packageVersion = "1." + project.version.toString().substringAfter('.')
             description = "Gsheet_Plus for Windows"
             includeAllModules = true
             windows {
                 menuGroup = "Gsheet_Plus"
                 shortcut = true
                 dirChooser = true
+                perUserInstall = true
+                iconFile.set(project.file("packaging/icon.ico"))
                 upgradeUuid = "6f1b2c1e-8d3a-4f55-9a4e-2b7c0d9e41a7"
             }
         }

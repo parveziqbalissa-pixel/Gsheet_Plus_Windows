@@ -14,7 +14,7 @@ fun columnSig(type: ColumnType, items: List<String>): String? = when (type) {
 fun normalizeCell(type: ColumnType, raw: String): String {
     val text = raw.trim()
     return when (type) {
-        ColumnType.NUMBER, ColumnType.CALC -> parseNumber(text)?.let(::formatNumber).orEmpty()
+        ColumnType.NUMBER, ColumnType.CALC, ColumnType.RATING -> parseNumber(text)?.let(::formatNumber).orEmpty()
         ColumnType.CHECKBOX -> text.lowercase()
         else -> text
     }

@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -90,23 +93,22 @@ object Thumbs {
     }
 }
 
+/** A picture's preview (or the file type for other files). [picture] treats files without a known type as pictures. */
 @Composable
-private fun Thumbnail(a: Attachment, onClick: () -> Unit) {
-    val isImage = a.mime.startsWith("image/")
-    val bitmap by produceState<ImageBitmap?>(null, a.id) {
+fun AttachmentThumb(a: Attachment, size: androidx.compose.ui.unit.Dp, picture: Boolean, onClick: (() -> Unit)? = null) {
+    val isImage = a.mime.startsWith("image/") || (picture && a.mime == "application/octet-stream")
+    val bitmap by produceState<ImageBitmap?>(null, a.id, a.driveId, a.localPath) {
         if (isImage) value = withContext(Dispatchers.IO) { Thumbs.load(a) }
     }
-    Box(
-        Modifier.size(84.dp).background(MaterialTheme.colorScheme.surfaceVariant).clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
+    val base = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant)
+    Box(if (onClick != null) base.clickable { onClick() } else base, contentAlignment = Alignment.Center) {
         val image = bitmap
         if (image != null) {
-            Image(bitmap = image, contentDescription = a.name, contentScale = ContentScale.Crop, modifier = Modifier.size(84.dp))
+            Image(bitmap = image, contentDescription = a.name, contentScale = ContentScale.Crop, modifier = Modifier.size(size))
         } else {
             Text(
-                if (!isImage) a.name.substringAfterLast('.', "file").uppercase().take(5) else "no preview",
-                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (!isImage) a.name.substringAfterLast('.', "file").uppercase().take(5) else "...",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -135,6 +137,15 @@ fun AttachmentDialog(c: Controller, tableId: Long, rowId: Long, column: GridColu
         c.say("Added $added" + if (skipped > 0) ", skipped $skipped (wrong kind of file)" else "")
     }
 
+    var drawing by remember { mutableStateOf(false) }
+    if (drawing) {
+        SignaturePadDialog(onSave = { path ->
+            drawing = false
+            c.edit(tableId) { c.ws.addAttachmentFile(tableId, rowId, column.id, path, "image/png") }
+            runCatching { java.nio.file.Files.deleteIfExists(path) }
+            c.say("Signature saved")
+        }, onDismiss = { drawing = false })
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(column.name) },
@@ -144,7 +155,7 @@ fun AttachmentDialog(c: Controller, tableId: Long, rowId: Long, column: GridColu
                 LazyColumn(Modifier.heightIn(max = 320.dp)) {
                     items(items, key = { it.id }) { a ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Thumbnail(a) { open(a) }
+                            AttachmentThumb(a, 84.dp, column.type == ColumnType.PICTURE) { open(a) }
                             Column(Modifier.weight(1f)) {
                                 Text(a.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Text(
@@ -159,7 +170,12 @@ fun AttachmentDialog(c: Controller, tableId: Long, rowId: Long, column: GridColu
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { add() }) { Text("Add from this PC...") } },
+        confirmButton = {
+            Row {
+                if (column.type == ColumnType.SIGNATURE) TextButton(onClick = { drawing = true }) { Text("Draw signature") }
+                TextButton(onClick = { add() }) { Text("Add from this PC...") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }

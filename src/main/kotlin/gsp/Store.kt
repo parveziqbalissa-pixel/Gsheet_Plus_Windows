@@ -64,6 +64,23 @@ class Link(
     var lastSyncedAt: Long? = null,
 )
 
+/** A named way of looking at a table: search, filters, sort and grouping. */
+class SavedView(val name: String, val options: ViewOptions)
+
+/** Colours a cell (or the whole row) when the cell in [columnId] matches [op] / [value]. */
+class ColorRule(
+    val id: Long,
+    val columnId: Long,
+    val op: FilterOp,
+    val value: String,
+    val color: Int,
+    val wholeRow: Boolean,
+    val bold: Boolean = false,
+)
+
+/** A deleted table waiting in the bin. */
+class TrashItem(val id: Long, val name: String, val deletedAt: Long, val rows: Int)
+
 class Conflict(val id: Long, val columnName: String, val kept: String, val lost: String, val at: Long)
 
 class TableData(val id: Long, var name: String) {
@@ -76,6 +93,8 @@ class TableData(val id: Long, var name: String) {
     val deletedRowUuids = ArrayList<String>()
     val deletedColumnNames = ArrayList<String>()
     val conflicts = ArrayList<Conflict>()
+    val views = ArrayList<SavedView>()
+    val rules = ArrayList<ColorRule>()
     /** Cells whose pictures or links changed and must be redrawn in the Sheet (not saved to disk). */
     val staleCells = HashSet<Pair<Long, Long>>()
     var nextId = 1L
@@ -199,13 +218,101 @@ class Workspace(val dir: Path) {
         find(tableId)?.let { it.pinned = pinned; touch(it, stamp = false) }
     }
 
+    /** Moves a table to the bin (data/trash); its files stay until the bin is emptied. */
     fun deleteTable(tableId: Long) = synchronized(lock) {
         val table = find(tableId) ?: return@synchronized
         tableList.remove(table)
         dirty.remove(tableId)
+        runCatching {
+            Files.createDirectories(trashDir)
+            Files.writeString(trashDir.resolve("table_$tableId.json"), TableJson.write(table))
+            Files.writeString(trashDir.resolve("table_$tableId.deleted"), System.currentTimeMillis().toString())
+        }
         runCatching { Files.deleteIfExists(dir.resolve("table_$tableId.json")) }
-        table.attachments.mapNotNull { it.localPath }.forEach { runCatching { Files.deleteIfExists(Path.of(it)) } }
         changes.value = changes.value + 1
+    }
+
+    val trashDir: Path get() = dir.resolve("trash")
+
+    fun trash(): List<TrashItem> = synchronized(lock) {
+        if (!Files.isDirectory(trashDir)) return emptyList()
+        Files.list(trashDir).use { stream ->
+            stream.filter { it.fileName.toString().matches(Regex("table_\\d+\\.json")) }.toList()
+        }.mapNotNull { path ->
+            runCatching {
+                val t = TableJson.read(Files.readString(path))
+                val at = runCatching { Files.readString(path.resolveSibling("table_${t.id}.deleted")).trim().toLong() }.getOrDefault(0L)
+                TrashItem(t.id, t.name, at, t.rows.size)
+            }.getOrNull()
+        }.sortedByDescending { it.deletedAt }
+    }
+
+    /** Brings a table back from the bin (with a new id if the old one is taken). */
+    fun restoreTable(trashId: Long): Long? = synchronized(lock) {
+        val path = trashDir.resolve("table_$trashId.json")
+        val old = runCatching { TableJson.read(Files.readString(path)) }.getOrNull() ?: return null
+        val table = if (tableList.any { it.id == old.id }) {
+            val map = (Json.parse(Files.readString(path)).obj() ?: return null).toMutableMap()
+            map["id"] = nextTableId++
+            TableJson.read(Json.write(map))
+        } else {
+            old
+        }
+        if (table.id >= nextTableId) nextTableId = table.id + 1
+        tableList += table
+        runCatching { Files.deleteIfExists(path) }
+        runCatching { Files.deleteIfExists(trashDir.resolve("table_$trashId.deleted")) }
+        touch(table, stamp = false)
+        table.id
+    }
+
+    /** Deletes a table in the bin for good, with its picture and file copies. */
+    fun purgeTable(trashId: Long) = synchronized(lock) {
+        val path = trashDir.resolve("table_$trashId.json")
+        runCatching { TableJson.read(Files.readString(path)) }.getOrNull()?.attachments
+            ?.mapNotNull { it.localPath }?.forEach { runCatching { Files.deleteIfExists(Path.of(it)) } }
+        runCatching { Files.deleteIfExists(path) }
+        runCatching { Files.deleteIfExists(trashDir.resolve("table_$trashId.deleted")) }
+        changes.value = changes.value + 1
+    }
+
+    // ----- saved views and colour rules -----
+
+    fun views(tableId: Long): List<SavedView> = synchronized(lock) { find(tableId)?.views?.toList().orEmpty() }
+
+    fun saveView(tableId: Long, name: String, options: ViewOptions) = synchronized(lock) {
+        val table = find(tableId) ?: return@synchronized
+        table.views.removeAll { it.name.equals(name.trim(), ignoreCase = true) }
+        table.views += SavedView(name.trim(), options.copy(collapsed = emptySet()))
+        touch(table, stamp = false)
+    }
+
+    fun deleteView(tableId: Long, name: String) = synchronized(lock) {
+        val table = find(tableId) ?: return@synchronized
+        table.views.removeAll { it.name == name }
+        touch(table, stamp = false)
+    }
+
+    fun rules(tableId: Long): List<ColorRule> = synchronized(lock) { find(tableId)?.rules?.toList().orEmpty() }
+
+    fun addRule(tableId: Long, columnId: Long, op: FilterOp, value: String, color: Int, wholeRow: Boolean, bold: Boolean) = synchronized(lock) {
+        val table = find(tableId) ?: return@synchronized
+        table.rules += ColorRule(table.newId(), columnId, op, value.trim(), color, wholeRow, bold)
+        touch(table, stamp = false)
+    }
+
+    fun deleteRule(tableId: Long, ruleId: Long) = synchronized(lock) {
+        val table = find(tableId) ?: return@synchronized
+        table.rules.removeAll { it.id == ruleId }
+        touch(table, stamp = false)
+    }
+
+    /** Fills a new table with the columns of a template. */
+    fun createFromTemplate(name: String, template: Template): Long = synchronized(lock) {
+        val id = createTable(name.ifBlank { template.name }, withStarter = false)
+        for (c in template.columns) addColumn(id, c.name, c.type, prefix = c.prefix, listItems = c.items, formula = c.formula)
+        repeat(3) { addRow(id) }
+        id
     }
 
     /** Copies a table. A copy is never linked to a Google Sheet; attachment files are duplicated. */
@@ -409,6 +516,10 @@ class Workspace(val dir: Path) {
         when {
             text.isEmpty() -> row.values.remove(col.id)
             col.type == ColumnType.NUMBER -> row.values[col.id] = formatNumber(parseNumber(text) ?: return false)
+            col.type == ColumnType.RATING -> {
+                val n = parseNumber(text)?.takeIf { it in 0.0..5.0 } ?: return false
+                if (n < 0.5) row.values.remove(col.id) else row.values[col.id] = Math.round(n).toString()
+            }
             else -> row.values[col.id] = text
         }
         return true

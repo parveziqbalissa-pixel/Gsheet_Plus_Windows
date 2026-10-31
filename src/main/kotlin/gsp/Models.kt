@@ -15,10 +15,12 @@ enum class ColumnType(val label: String) {
     FILE("File"),
     AUDIO("Audio"),
     CALC("Formula"),
+    RATING("Rating"),
+    SIGNATURE("Signature"),
     ;
 
     /** Pictures, files and recordings: the cell holds one name per line; the Drive links are kept per attachment. */
-    val isAttachment: Boolean get() = this == PICTURE || this == FILE || this == AUDIO
+    val isAttachment: Boolean get() = this == PICTURE || this == FILE || this == AUDIO || this == SIGNATURE
 
     companion object {
         fun fromName(name: String): ColumnType = entries.firstOrNull { it.name == name } ?: TEXT
@@ -56,7 +58,7 @@ data class GridColumn(
     val italic: Boolean = false,
     val pinned: Boolean = false,
 ) {
-    val isNumeric: Boolean get() = type == ColumnType.NUMBER || type == ColumnType.CALC
+    val isNumeric: Boolean get() = type == ColumnType.NUMBER || type == ColumnType.CALC || type == ColumnType.RATING
     val locked: Boolean get() = readOnly || type == ColumnType.CALC
 }
 

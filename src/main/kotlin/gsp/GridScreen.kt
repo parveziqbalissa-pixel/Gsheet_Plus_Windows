@@ -76,6 +76,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.DragData
+import androidx.compose.ui.onExternalDrag
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import java.awt.Desktop
 import java.net.URI
 import kotlin.math.roundToInt
@@ -104,6 +108,15 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     }
     val link = remember(tick) { c.ws.link(tableId) }
     val attachments = remember(tick) { c.ws.attachments(tableId) }
+    val rules = remember(tick) { c.ws.rules(tableId) }
+    val savedViews = remember(tick) { c.ws.views(tableId) }
+    var mode by remember(tableId) { mutableStateOf("table") }
+    var activeView by remember(tableId) { mutableStateOf<String?>(null) }
+    var rowPage by remember { mutableStateOf<Long?>(null) }
+    var chartOpen by remember { mutableStateOf(false) }
+    var rulesOpen by remember { mutableStateOf(false) }
+    var saveViewOpen by remember { mutableStateOf(false) }
+    var viewsMenu by remember { mutableStateOf(false) }
     var view by remember { mutableStateOf(ViewOptions()) }
     val shown = remember(grid, view) { applyView(grid, view) }
     val columns = remember(grid.columns) { grid.columns.sortedBy { if (it.pinned) 0 else 1 } }
@@ -141,9 +154,11 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
 
     LaunchedEffect(link != null) {
         if (link != null) {
+            c.syncNow(tableId, announce = false)
             while (true) {
-                c.syncNow(tableId, announce = false)
-                kotlinx.coroutines.delay(15_000)
+                val seconds = c.syncSeconds.value
+                kotlinx.coroutines.delay(if (seconds > 0) seconds * 1000L else 2000L)
+                if (c.syncSeconds.value > 0) c.syncNow(tableId, announce = false)
             }
         }
     }
@@ -251,6 +266,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     val numbered = remember(ordered) { ordered.withIndex().associate { it.value.id to it.index + 1 } }
     val rowContent: @Composable (GridRow) -> Unit = { row ->
         DataRow(
+            pictureHeight = c.pictureRows.value,
             number = numbered[row.id] ?: 0, row = row, columns = columns, widthOf = ::widthOf, hs = hs,
             isSelected = ::isSelected, editing = editing, editStart = editStart, attachments = attachments,
             cellMenu = cellMenu,
@@ -274,6 +290,8 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             onMenuClear = { clearSelection() },
             onMenuEdit = { colId -> startEdit(row.id, colId) },
             onRowSelect = { sel = Sel(row.id, columns.first().id, row.id, columns.last().id); focus.requestFocus() },
+            onOpenRow = { rowPage = row.id },
+            paint = paintRow(row, columns, rules),
             onCopyRow = {
                 CellClipboard.set(buildClip(listOf(row), columns, attachments, wholeRows = true))
                 c.say("Copied row")
@@ -289,7 +307,52 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
         )
     }
 
-    Column(Modifier.fillMaxSize()) {
+    fun dropFiles(files: List<java.io.File>) {
+        val active = sel
+        val usable = files.filter { it.isFile }
+        if (usable.isEmpty()) return
+        if (active == null || mode != "table") { c.say("Click a cell first, then drop the files on the window."); return }
+        val col = columns.firstOrNull { it.id == active.endCol } ?: return
+        val media = PastedMedia(usable.map { it.toPath() }, false)
+        if (col.locked) { c.say("This column cannot be edited."); return }
+        if (col.type.isAttachment) pasteMedia(col, active.endRow, media) else mediaPaste = Triple(col, active.endRow, media)
+    }
+
+    fun pictureUrl(row: GridRow, col: GridColumn): String? {
+        val first = attachmentLinks(row.values[col.id].orEmpty()).firstOrNull() ?: return null
+        val a = attachments.firstOrNull { it.rowId == row.id && it.columnId == col.id && it.name == first } ?: return null
+        a.localPath?.let { p -> java.io.File(p).takeIf { it.exists() }?.let { return it.toURI().toString() } }
+        return a.driveId?.let { "https://drive.google.com/thumbnail?id=$it&sz=w320" }
+    }
+
+    fun openReport() {
+        val title = grid.name + (activeView?.let { " - $it" } ?: "")
+        c.openPage(title, reportHtml(title, c.reportHeader.value, columns, ordered, ::pictureUrl))
+        if (c.reportHeader.value.business.isBlank()) c.say("Tip: add your business name and logo in Settings > Report")
+    }
+
+    fun openMap() {
+        val address = columns.firstOrNull { it.type == ColumnType.ADDRESS }
+        if (address == null) { c.say("Add an Address column to see rows on a map."); return }
+        val title = titleColumn(columns)
+        val places = ordered.mapNotNull { r ->
+            val a = r.values[address.id].orEmpty().trim()
+            if (a.isEmpty()) null else (title?.let { r.values[it.id] }?.takeIf { it.isNotBlank() } ?: "Row") to a
+        }
+        if (places.isEmpty()) { c.say("No addresses in the rows shown."); return }
+        c.openPage(grid.name + " map", mapHtml(grid.name, places))
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Suppress("DEPRECATION")
+    val dropModifier = Modifier.onExternalDrag(onDrop = { value ->
+        val data = value.dragData
+        if (data is DragData.FilesList) {
+            dropFiles(data.readFiles().mapNotNull { runCatching { java.io.File(URI(it)) }.getOrNull() })
+        }
+    })
+
+    Column(Modifier.fillMaxSize().then(dropModifier)) {
         // ----- top bar -----
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = onBack) { Text("‹ Tables") }
@@ -348,6 +411,52 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             }
         }
 
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("table" to "Table", "cards" to "Cards", "calendar" to "Calendar").forEach { (m, label) ->
+                FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(label) })
+            }
+            Box {
+                TextButton(onClick = { viewsMenu = true }) { Text("View: " + (activeView ?: "All rows") + "  ▾") }
+                DropdownMenu(expanded = viewsMenu, onDismissRequest = { viewsMenu = false }) {
+                    DropdownMenuItem(text = { Text("All rows") }, onClick = { viewsMenu = false; activeView = null; view = ViewOptions() })
+                    savedViews.forEach { v ->
+                        DropdownMenuItem(
+                            text = { Text(v.name) },
+                            onClick = { viewsMenu = false; activeView = v.name; view = v.options },
+                            trailingIcon = {
+                                TextButton(onClick = {
+                                    viewsMenu = false
+                                    c.ws.deleteView(tableId, v.name)
+                                    if (activeView == v.name) activeView = null
+                                }) { Text("✕") }
+                            },
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("Save current search, filters and sort as a view...") }, onClick = { viewsMenu = false; saveViewOpen = true })
+                }
+            }
+            TextButton(onClick = { chartOpen = true }) { Text("Chart") }
+            TextButton(onClick = { rulesOpen = true }) { Text("Colour rules" + if (rules.isNotEmpty()) " (${rules.size})" else "") }
+            TextButton(onClick = { openReport() }) { Text("Report / PDF") }
+            if (columns.any { it.type == ColumnType.ADDRESS }) TextButton(onClick = { openMap() }) { Text("Map") }
+        }
+
+        if (mode == "cards") {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                CardsView(ordered, columns, attachments, rules) { rowPage = it }
+            }
+        } else if (mode == "calendar") {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                CalendarView(ordered, columns, rules, onOpen = { rowPage = it }, onAdd = { date, col ->
+                    val id = c.edit(tableId) { c.ws.addRow(tableId) }
+                    if (id != null) {
+                        c.ws.setCell(tableId, id, col.id, date.toString())
+                        rowPage = id
+                    }
+                })
+            }
+        } else {
         // ----- table -----
         val totalWidth = (RowNumberWidth.value + columns.sumOf { widthOf(it) } + 40).dp
         Box(
@@ -465,6 +574,8 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             }
         }
 
+        }
+
         // ----- bottom bar -----
         val b = block()
         if (b != null && (b.first.size > 1 || b.second.size > 1)) {
@@ -558,6 +669,21 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             }
         }, { widthColumn = null })
     }
+    rowPage?.let { id ->
+        RowPageDialog(c, tableId, id, onAttachments = { col -> attachTarget = id to col }, onDismiss = { rowPage = null })
+    }
+    if (chartOpen) ChartDialog(c, shown.rows, columns) { chartOpen = false }
+    if (rulesOpen) RulesDialog(c, tableId, columns) { rulesOpen = false }
+    if (saveViewOpen) {
+        NameDialog("Save view", "View name (e.g. Unpaid)", "Save", activeView.orEmpty(), { name ->
+            saveViewOpen = false
+            if (name.isNotBlank()) {
+                c.ws.saveView(tableId, name, view)
+                activeView = name.trim()
+                c.say("View \"${name.trim()}\" saved")
+            }
+        }, { saveViewOpen = false })
+    }
     if (historyOpen) {
         HistoryDialog(
             c.ws.conflicts(tableId),
@@ -640,26 +766,31 @@ private fun HeaderCell(
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun DataRow(
+    pictureHeight: Int,
     number: Int, row: GridRow, columns: List<GridColumn>, widthOf: (GridColumn) -> Int, hs: androidx.compose.foundation.ScrollState,
     isSelected: (Long, Long) -> Boolean, editing: Pair<Long, Long>?, editStart: String?, attachments: List<Attachment>,
     cellMenu: Pair<Long, Long>?,
     onPress: (Long, Boolean) -> Unit, onDrag: (Long) -> Unit, onRightClick: (Long) -> Unit, onDouble: (Long) -> Unit,
     onCommit: (Long, String) -> Unit, onCancelEdit: () -> Unit, onCloseMenu: () -> Unit,
     onMenuCopy: () -> Unit, onMenuPaste: () -> Unit, onMenuClear: () -> Unit, onMenuEdit: (Long) -> Unit,
-    onRowSelect: () -> Unit, onCopyRow: () -> Unit, onPasteRows: () -> Unit, onRowColor: () -> Unit, onDeleteRow: () -> Unit,
+    onRowSelect: () -> Unit, onOpenRow: () -> Unit, paint: RulePaint, onCopyRow: () -> Unit, onPasteRows: () -> Unit, onRowColor: () -> Unit, onDeleteRow: () -> Unit,
     onOpenAttachments: (GridColumn) -> Unit, onToggleList: (Long, String) -> Unit,
 ) {
     var rowMenu by remember { mutableStateOf(false) }
     val surface = MaterialTheme.colorScheme.surface
+    // Rows that hold pictures are taller and show the pictures, like the previews in Google Sheets.
+    val hasPictures = pictureHeight > 0 && columns.any { (it.type == ColumnType.PICTURE || it.type == ColumnType.SIGNATURE) && attachmentLinks(row.values[it.id].orEmpty()).isNotEmpty() }
+    val rowHeight = if (hasPictures) pictureHeight.dp else CellHeight
     Row {
         Box(
-            Modifier.pin(true, hs).width(RowNumberWidth).height(CellHeight).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            Modifier.pin(true, hs).width(RowNumberWidth).height(rowHeight).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                 .background(row.color?.let { Color(it) } ?: MaterialTheme.colorScheme.surfaceVariant)
                 .combinedClickable(onClick = { onRowSelect(); rowMenu = true }),
             contentAlignment = Alignment.Center,
         ) {
             Text(number.toString(), style = MaterialTheme.typography.labelMedium, color = if (row.color != null) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant)
             DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
+                DropdownMenuItem(text = { Text("Open row page") }, onClick = { rowMenu = false; onOpenRow() })
                 DropdownMenuItem(text = { Text("Copy row") }, onClick = { rowMenu = false; onCopyRow() })
                 DropdownMenuItem(text = { Text("Paste as new row") }, enabled = CellClipboard.resolve() != null, onClick = { rowMenu = false; onPasteRows() })
                 DropdownMenuItem(text = { Text("Row colour") }, onClick = { rowMenu = false; onRowColor() })
@@ -669,7 +800,7 @@ private fun DataRow(
         columns.forEach { col ->
             val value = row.values[col.id].orEmpty()
             val selected = isSelected(row.id, col.id)
-            val tint = col.bgColor ?: row.color
+            val tint = paint.cells[col.id] ?: paint.rowColor ?: col.bgColor ?: row.color
             val background = when {
                 selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
                 tint != null -> Color(tint)
@@ -679,14 +810,14 @@ private fun DataRow(
             val textColor = col.textColor?.let { Color(it) } ?: if (tint != null) Color.Black else MaterialTheme.colorScheme.onSurface
             val style = MaterialTheme.typography.bodyMedium.copy(
                 color = textColor,
-                fontWeight = if (col.bold) FontWeight.Bold else null,
+                fontWeight = if (col.bold || col.id in paint.bold) FontWeight.Bold else null,
                 fontStyle = if (col.italic) FontStyle.Italic else null,
                 textAlign = if (col.isNumeric) TextAlign.End else TextAlign.Start,
             )
             val isEditing = editing == (row.id to col.id)
             val target = if (isEditing) null else linkOf(col, value)
             Box(
-                Modifier.pin(col.pinned, hs).width(widthOf(col).dp).height(CellHeight)
+                Modifier.pin(col.pinned, hs).width(widthOf(col).dp).height(rowHeight)
                     .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant).background(background)
                     .onPointerEvent(PointerEventType.Press) { event ->
                         if (event.buttons.isSecondaryPressed) onRightClick(col.id)
@@ -709,6 +840,23 @@ private fun DataRow(
                     )
                     col.type == ColumnType.CHECKBOX && !col.locked ->
                         Checkbox(checked = value == "true", onCheckedChange = { onToggleList(col.id, if (it) "true" else "false") })
+                    col.type == ColumnType.RATING -> Stars(value, !col.locked) { v -> onToggleList(col.id, v) }
+                    (col.type == ColumnType.PICTURE || col.type == ColumnType.SIGNATURE) && hasPictures && attachmentLinks(value).isNotEmpty() -> {
+                        val names = attachmentLinks(value)
+                        val inCell = names.mapNotNull { n -> attachments.firstOrNull { it.rowId == row.id && it.columnId == col.id && it.name == n } }
+                        val thumb = (pictureHeight - 8).coerceAtLeast(24)
+                        val fit = ((widthOf(col) - 16) / (thumb + 4)).coerceAtLeast(1)
+                        val shownThumbs = inCell.take(if (inCell.size > fit) (fit - 1).coerceAtLeast(1) else fit)
+                        Row(
+                            Modifier.fillMaxSize().combinedClickable(onClick = { onOpenAttachments(col) }),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            shownThumbs.forEach { AttachmentThumb(it, thumb.dp, picture = true) }
+                            if (names.size > shownThumbs.size) {
+                                Text("+${names.size - shownThumbs.size}", style = style.copy(color = MaterialTheme.colorScheme.primary))
+                            }
+                        }
+                    }
                     col.type.isAttachment -> {
                         val names = attachmentLinks(value)
                         val pending = attachments.count { it.rowId == row.id && it.columnId == col.id && it.url == null }

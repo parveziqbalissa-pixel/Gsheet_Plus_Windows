@@ -16,11 +16,109 @@ class Toast(val text: String, val actionLabel: String? = null, val action: (() -
 /** Holds the tables, the Google connection and the sync, and is shared by all screens. */
 class Controller(private val scope: CoroutineScope) {
     private val root = Paths.get(System.getenv("APPDATA") ?: System.getProperty("user.home"), "GsheetPlus")
+    val backups = Backups(root.resolve("data"), root.resolve("backups"))
+
+    /** True when a backup was put back at this start. */
+    val restoredAtStart: Boolean = backups.applyPending()
     val ws = Workspace(root.resolve("data"))
     val auth = GoogleAuth()
     val api = SheetsApi(auth)
     val engine = SyncEngine(ws, api)
     val attachmentSync = AttachmentSync(ws, GoogleAttachments(auth, api))
+
+    val dataFolder: java.nio.file.Path get() = root
+    val settings = AppSettings(root.resolve("settings.json"))
+    val dark = mutableStateOf(settings.dark)
+    val syncSeconds = mutableStateOf(settings.syncSeconds)
+    val pictureRows = mutableStateOf(settings.pictureRows)
+
+    /** Locked with a PIN until [unlock] succeeds. */
+    val locked = mutableStateOf(settings.pinHash != null)
+    val hasPin = mutableStateOf(settings.pinHash != null)
+    val quickAdd = mutableStateOf(false)
+
+    /** Set by the open table: receives files dropped on the window. */
+    @Volatile
+    var dropHandler: ((List<java.io.File>) -> Unit)? = null
+
+    fun unlock(pin: String): Boolean {
+        val ok = PinLock.check(pin, settings.pinSalt, settings.pinHash)
+        if (ok) locked.value = false
+        return ok
+    }
+
+    fun setPin(pin: String?) {
+        if (pin == null) {
+            settings.pinSalt = null
+            settings.pinHash = null
+        } else {
+            val salt = PinLock.newSalt()
+            settings.pinSalt = salt
+            settings.pinHash = PinLock.hash(pin, salt)
+        }
+        settings.save()
+        hasPin.value = pin != null
+    }
+
+    fun lockNow() {
+        if (settings.pinHash != null) locked.value = true
+    }
+
+    val reportHeader = mutableStateOf(ReportHeader(settings.reportBusiness, settings.reportLine2, settings.reportLogo))
+
+    fun setReportHeader(header: ReportHeader) {
+        reportHeader.value = header
+        settings.reportBusiness = header.business
+        settings.reportLine2 = header.line2
+        settings.reportLogo = header.logoPath
+        settings.save()
+    }
+
+    val dailyBackup = mutableStateOf(settings.dailyBackup)
+
+    fun setDailyBackup(value: Boolean) {
+        dailyBackup.value = value
+        settings.dailyBackup = value
+        settings.save()
+    }
+
+    fun backupNow(quiet: Boolean = false) {
+        background("Backup") {
+            ws.flush()
+            val made = if (quiet) backups.daily() else backups.create()
+            if (!quiet && made != null) say("Backup saved: ${made.fileName}")
+        }
+    }
+
+    /** Writes a page to the reports folder and opens it in the browser. */
+    fun openPage(name: String, html: String) {
+        background("Open page") {
+            val dir = root.resolve("reports")
+            java.nio.file.Files.createDirectories(dir)
+            val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(60)
+            val file = dir.resolve("$safe.html")
+            java.nio.file.Files.writeString(file, html)
+            java.awt.Desktop.getDesktop().browse(file.toUri())
+        }
+    }
+
+    fun setPictureRows(value: Int) {
+        pictureRows.value = value
+        settings.pictureRows = value
+        settings.save()
+    }
+
+    fun setDark(value: Boolean) {
+        dark.value = value
+        settings.dark = value
+        settings.save()
+    }
+
+    fun setSyncSeconds(value: Int) {
+        syncSeconds.value = value
+        settings.syncSeconds = value
+        settings.save()
+    }
 
     val toast = mutableStateOf<Toast?>(null)
     val syncing = mutableStateOf(false)

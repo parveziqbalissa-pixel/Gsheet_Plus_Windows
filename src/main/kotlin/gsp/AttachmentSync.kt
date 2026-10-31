@@ -101,6 +101,15 @@ class AttachmentSync(private val ws: Workspace, private val gateway: AttachmentG
         val found = gateway.links(link.spreadsheetId, link.tabTitle, columns.map { it.second })
         val byIndex = columns.associate { it.second to it.first }
         ws.withTable(tableId) { t ->
+            val pictureColumns = t.columns.filter { it.type == ColumnType.PICTURE }.map { it.id }.toSet()
+            fun kindOf(name: String, columnId: Long): String {
+                val guess = mimeFromName(name)
+                // Photos taken on the phone are named like "Photo 19 Oct 21:55", without an extension.
+                return if (guess == "application/octet-stream" && columnId in pictureColumns) "image/jpeg" else guess
+            }
+            for (a in t.attachments) {
+                if (a.columnId in pictureColumns && a.mime == "application/octet-stream") a.mime = "image/jpeg"
+            }
             val rowBySheet = t.rows.filter { it.sourceRow != null }.associateBy { it.sourceRow!! - 1 }
             for ((pos, entries) in found) {
                 val row = rowBySheet[pos.first] ?: continue
@@ -110,7 +119,7 @@ class AttachmentSync(private val ws: Workspace, private val gateway: AttachmentG
                 for ((text, uri) in entries) {
                     val name = text.trim()
                     if (name.isEmpty() || have.any { it.name == name }) continue
-                    t.attachments += Attachment(t.newId(), row.id, columnId, name, mimeFromName(name), null, driveIdOf(uri), uri, true)
+                    t.attachments += Attachment(t.newId(), row.id, columnId, name, kindOf(name, columnId), null, driveIdOf(uri), uri, true)
                    
                 }
                 // Links that vanished from the cell (removed on the phone or in the Sheet).

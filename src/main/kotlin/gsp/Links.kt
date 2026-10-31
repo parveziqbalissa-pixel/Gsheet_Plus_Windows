@@ -20,6 +20,8 @@ fun linkOf(column: GridColumn, value: String): String? {
         EMAIL_ONLY.matches(v) -> "mailto:$v"
         column.type == ColumnType.PHONE && digits >= 5 && v.all { it.isDigit() || it in "+ ()-.*#" } ->
             "tel:" + v.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+        column.type == ColumnType.ADDRESS ->
+            "https://www.google.com/maps/search/?api=1&query=" + java.net.URLEncoder.encode(v, "UTF-8")
         column.type != ColumnType.PHONE && INTERNATIONAL_PHONE.matches(v) && digits >= 8 ->
             "tel:" + v.filter { it.isDigit() || it == '+' }
         else -> null

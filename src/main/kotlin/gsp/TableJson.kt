@@ -31,6 +31,20 @@ object TableJson {
                     "localPath" to it.localPath, "driveId" to it.driveId, "url" to it.url, "sheetSynced" to it.sheetSynced,
                 )
             },
+            "views" to t.views.map { v ->
+                linkedMapOf(
+                    "name" to v.name, "search" to v.options.search,
+                    "sortColumn" to v.options.sort?.columnId, "sortDir" to v.options.sort?.direction?.name,
+                    "groupBy" to v.options.groupBy,
+                    "filters" to v.options.filters.values.map { f -> linkedMapOf("column" to f.columnId, "op" to f.op.name, "value" to f.value) },
+                )
+            },
+            "rules" to t.rules.map { r ->
+                linkedMapOf(
+                    "id" to r.id, "column" to r.columnId, "op" to r.op.name, "value" to r.value,
+                    "color" to r.color, "wholeRow" to r.wholeRow, "bold" to r.bold,
+                )
+            },
             "conflicts" to t.conflicts.map {
                 linkedMapOf("id" to it.id, "column" to it.columnName, "kept" to it.kept, "lost" to it.lost, "at" to it.at)
             },
@@ -74,6 +88,28 @@ object TableJson {
                 a["id"].long(), a["rowId"].long(), a["columnId"].long(), a["name"].text(), a["mime"].text(),
                 a["localPath"] as? String, a["driveId"] as? String, a["url"] as? String, a["sheetSynced"].bool(),
             )
+        }
+        for (v in o["views"].arr().orEmpty().mapNotNull { it.obj() }) {
+            val sortColumn = (v["sortColumn"] as? Number)?.toLong()
+            val sortDir = SortDirection.entries.firstOrNull { it.name == v["sortDir"].text() }
+            val filters = v["filters"].arr().orEmpty().mapNotNull { it.obj() }.mapNotNull { f ->
+                val op = FilterOp.entries.firstOrNull { it.name == f["op"].text() } ?: return@mapNotNull null
+                val col = f["column"].long()
+                col to FilterSpec(col, op, f["value"].text())
+            }.toMap()
+            t.views += SavedView(
+                v["name"].text(),
+                ViewOptions(
+                    search = v["search"].text(),
+                    sort = if (sortColumn != null && sortDir != null) SortSpec(sortColumn, sortDir) else null,
+                    filters = filters,
+                    groupBy = (v["groupBy"] as? Number)?.toLong(),
+                ),
+            )
+        }
+        for (r in o["rules"].arr().orEmpty().mapNotNull { it.obj() }) {
+            val op = FilterOp.entries.firstOrNull { it.name == r["op"].text() } ?: continue
+            t.rules += ColorRule(r["id"].long(), r["column"].long(), op, r["value"].text(), r["color"].intOrNull() ?: 0, r["wholeRow"].bool(), r["bold"].bool())
         }
         for (c in o["conflicts"].arr().orEmpty().mapNotNull { it.obj() }) {
             t.conflicts += Conflict(c["id"].long(), c["column"].text(), c["kept"].text(), c["lost"].text(), c["at"].long())

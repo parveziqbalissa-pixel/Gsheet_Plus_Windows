@@ -78,7 +78,7 @@ object SheetImport {
                 else -> raw.toString()
             }
 
-            ColumnType.NUMBER, ColumnType.CALC -> when (raw) {
+            ColumnType.NUMBER, ColumnType.CALC, ColumnType.RATING -> when (raw) {
                 is Number -> formatNumber(raw.toDouble())
                 is String -> raw.trim().toDoubleOrNull()?.takeIf { it.isFinite() }?.let(::formatNumber).orEmpty()
                 else -> ""
@@ -106,7 +106,7 @@ object SheetImport {
                 else -> ""
             }
 
-            ColumnType.LIST, ColumnType.PHONE, ColumnType.ADDRESS, ColumnType.PICTURE, ColumnType.FILE, ColumnType.AUDIO -> when (raw) {
+            ColumnType.LIST, ColumnType.PHONE, ColumnType.ADDRESS, ColumnType.PICTURE, ColumnType.FILE, ColumnType.AUDIO, ColumnType.SIGNATURE -> when (raw) {
                 is String -> raw.trim()
                 is Boolean -> raw.toString().uppercase()
                 is Number -> formatNumber(raw.toDouble())

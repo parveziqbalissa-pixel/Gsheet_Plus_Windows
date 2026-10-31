@@ -55,9 +55,9 @@ data class ViewOptions(
 )
 
 fun opsFor(type: ColumnType): List<FilterOp> = when (type) {
-    ColumnType.TEXT, ColumnType.LIST, ColumnType.PHONE, ColumnType.ADDRESS, ColumnType.PICTURE, ColumnType.FILE, ColumnType.AUDIO ->
+    ColumnType.TEXT, ColumnType.LIST, ColumnType.PHONE, ColumnType.ADDRESS, ColumnType.PICTURE, ColumnType.FILE, ColumnType.AUDIO, ColumnType.SIGNATURE ->
         listOf(FilterOp.CONTAINS, FilterOp.EQUALS, FilterOp.IS_EMPTY, FilterOp.NOT_EMPTY)
-    ColumnType.NUMBER, ColumnType.CALC, ColumnType.DATE, ColumnType.TIME ->
+    ColumnType.NUMBER, ColumnType.CALC, ColumnType.RATING, ColumnType.DATE, ColumnType.TIME ->
         listOf(FilterOp.EQUALS, FilterOp.GREATER, FilterOp.LESS, FilterOp.IS_EMPTY, FilterOp.NOT_EMPTY)
     ColumnType.CHECKBOX -> listOf(FilterOp.CHECKED, FilterOp.UNCHECKED)
 }
@@ -67,7 +67,7 @@ fun isValidFilterValue(type: ColumnType, op: FilterOp, value: String): Boolean {
     val v = value.trim()
     if (v.isEmpty()) return false
     return when (type) {
-        ColumnType.NUMBER, ColumnType.CALC -> op == FilterOp.CONTAINS || parseNumber(v) != null
+        ColumnType.NUMBER, ColumnType.CALC, ColumnType.RATING -> op == FilterOp.CONTAINS || parseNumber(v) != null
         ColumnType.DATE -> op == FilterOp.CONTAINS || runCatching { LocalDate.parse(v) }.isSuccess
         ColumnType.TIME -> op == FilterOp.CONTAINS || runCatching { java.time.LocalTime.parse(v) }.isSuccess
         else -> true
@@ -99,7 +99,7 @@ fun applyView(data: GridData, options: ViewOptions): GridData {
     return data.copy(rows = rows)
 }
 
-private fun matches(spec: FilterSpec, type: ColumnType, text: String): Boolean {
+fun matches(spec: FilterSpec, type: ColumnType, text: String): Boolean {
     val v = spec.value.trim()
     return when (spec.op) {
         FilterOp.IS_EMPTY -> text.isEmpty()
@@ -108,7 +108,7 @@ private fun matches(spec: FilterSpec, type: ColumnType, text: String): Boolean {
         FilterOp.UNCHECKED -> text != "true"
         FilterOp.CONTAINS -> text.contains(v, ignoreCase = true)
         FilterOp.EQUALS ->
-            if (type == ColumnType.NUMBER || type == ColumnType.CALC) {
+            if (type == ColumnType.NUMBER || type == ColumnType.CALC || type == ColumnType.RATING) {
                 val a = parseNumber(text)
                 val b = parseNumber(v)
                 a != null && b != null && a == b
@@ -117,7 +117,7 @@ private fun matches(spec: FilterSpec, type: ColumnType, text: String): Boolean {
             }
 
         FilterOp.GREATER, FilterOp.LESS -> {
-            val comparison = if (type == ColumnType.NUMBER || type == ColumnType.CALC) {
+            val comparison = if (type == ColumnType.NUMBER || type == ColumnType.CALC || type == ColumnType.RATING) {
                 val a = parseNumber(text)
                 val b = parseNumber(v)
                 if (a == null || b == null) return false

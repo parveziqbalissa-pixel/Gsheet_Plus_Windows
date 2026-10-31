@@ -187,7 +187,7 @@ val BackgroundPalette = listOf(0xFFFFCDD2, 0xFFFFE0B2, 0xFFFFF9C4, 0xFFC8E6C9, 0
 val TextPalette = listOf(0xFFB71C1C, 0xFFE65100, 0xFF827717, 0xFF1B5E20, 0xFF006064, 0xFF0D47A1, 0xFF4A148C, 0xFF880E4F, 0xFF3E2723, 0xFF000000).map { it.toInt() }
 
 @Composable
-private fun Swatches(colors: List<Int>, current: Int?, onPick: (Int?) -> Unit) {
+fun Swatches(colors: List<Int>, current: Int?, onPick: (Int?) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = { onPick(null) }) { Text(if (current == null) "None ✓" else "None") }
         colors.forEach { c ->
