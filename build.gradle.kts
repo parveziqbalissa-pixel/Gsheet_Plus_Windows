@@ -7,13 +7,12 @@ plugins {
 }
 
 group = "com.gsheetplus"
-version = "0.1.0"
+version = "0.2.0"
 
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.foundation)
-    implementation("org.json:json:20240303")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.8.1")
 }
 

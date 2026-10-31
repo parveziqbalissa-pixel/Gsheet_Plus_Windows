@@ -1,15 +1,11 @@
 package gsp
 
 import com.sun.net.httpserver.HttpServer
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import org.json.JSONObject
 import java.awt.Desktop
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -20,27 +16,32 @@ import java.nio.file.Paths
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
 class NotSignedIn : Exception("Please sign in with Google.")
 
 /**
  * Google sign-in for a desktop program: the browser opens, you approve, and Google sends the answer
  * to a small server that runs on this PC for a moment (127.0.0.1). The refresh token is kept in
- * %APPDATA%\GsheetPlus so you stay signed in.
+ * %APPDATA%\GsheetPlus so you stay signed in. The functions block, so call them off the screen thread.
  */
-class GoogleAuth {
+class GoogleAuth(
+    private val clientId: String = Secrets.CLIENT_ID,
+    private val clientSecret: String = Secrets.CLIENT_SECRET,
+    private val file: Path = Paths.get(System.getenv("APPDATA") ?: System.getProperty("user.home"), "GsheetPlus", "auth.json"),
+) {
     private val http = HttpClient.newHttpClient()
-    private val file: Path = Paths.get(System.getenv("APPDATA") ?: System.getProperty("user.home"), "GsheetPlus", "auth.json")
 
     @Volatile private var accessToken: String? = null
     @Volatile private var expiresAt = 0L
 
-    fun isConfigured(): Boolean = Secrets.CLIENT_ID.isNotBlank() && Secrets.CLIENT_SECRET.isNotBlank()
+    fun isConfigured(): Boolean = clientId.isNotBlank() && clientSecret.isNotBlank()
 
     fun isSignedIn(): Boolean = refreshToken() != null
 
     private fun refreshToken(): String? = runCatching {
-        JSONObject(Files.readString(file)).optString("refresh_token").ifEmpty { null }
+        Json.parse(Files.readString(file)).obj()?.get("refresh_token").text().ifEmpty { null }
     }.getOrNull()
 
     fun signOut() {
@@ -50,40 +51,41 @@ class GoogleAuth {
     }
 
     /** A valid access token, refreshed when it is about to expire. */
-    suspend fun token(): String {
+    @Synchronized
+    fun token(): String {
         val current = accessToken
         if (current != null && System.currentTimeMillis() < expiresAt - 60_000) return current
         val refresh = refreshToken() ?: throw NotSignedIn()
         val json = postForm(
             "grant_type" to "refresh_token",
             "refresh_token" to refresh,
-            "client_id" to Secrets.CLIENT_ID,
-            "client_secret" to Secrets.CLIENT_SECRET,
+            "client_id" to clientId,
+            "client_secret" to clientSecret,
         )
-        if (json.has("error")) {
-            if (json.optString("error") == "invalid_grant") signOut()
+        if (json.containsKey("error")) {
+            if (json["error"] == "invalid_grant") signOut()
             throw NotSignedIn()
         }
-        accessToken = json.getString("access_token")
-        expiresAt = System.currentTimeMillis() + json.optLong("expires_in", 3600) * 1000
+        accessToken = json["access_token"].text()
+        expiresAt = System.currentTimeMillis() + ((json["expires_in"] as? Number)?.toLong() ?: 3600L) * 1000
         return accessToken!!
     }
 
     /** Opens the browser and waits (up to 5 minutes) for the approval. */
-    suspend fun signIn() = withContext(Dispatchers.IO) {
+    fun signIn() {
         val random = SecureRandom()
-        fun randomText(bytes: Int) = ByteArray(bytes).also(random::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
+        fun randomText(bytes: Int) = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(bytes).also(random::nextBytes))
         val verifier = randomText(48)
         val challenge = Base64.getUrlEncoder().withoutPadding()
             .encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()))
         val state = randomText(16)
-        val answer = CompletableDeferred<Map<String, String>>()
+        val answer = CompletableFuture<Map<String, String>>()
 
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/") { exchange ->
             val query = exchange.requestURI.rawQuery.orEmpty()
                 .split('&').filter { it.contains('=') }
-                .associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8") }
+                .associate { it.substringBefore('=') to URLDecoder.decode(it.substringAfter('='), "UTF-8") }
             val page = "<html><body style='font-family:sans-serif;padding:40px'><h2>Gsheet_Plus</h2>" +
                 (if (query.containsKey("code")) "<p>Signed in. You can close this tab and return to the app.</p>" else "<p>Sign-in was not completed.</p>") +
                 "</body></html>"
@@ -97,7 +99,7 @@ class GoogleAuth {
         try {
             val redirect = "http://127.0.0.1:${server.address.port}"
             val url = "https://accounts.google.com/o/oauth2/v2/auth?" + listOf(
-                "client_id" to Secrets.CLIENT_ID,
+                "client_id" to clientId,
                 "redirect_uri" to redirect,
                 "response_type" to "code",
                 "scope" to SCOPES,
@@ -109,42 +111,47 @@ class GoogleAuth {
             ).joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, "UTF-8")}" }
             Desktop.getDesktop().browse(URI(url))
 
-            val result = withTimeout(5 * 60_000L) { answer.await() }
+            val result = try {
+                answer.get(5, TimeUnit.MINUTES)
+            } catch (e: java.util.concurrent.TimeoutException) {
+                error("Sign-in timed out. Please try again.")
+            }
             if (result["state"] != state) error("Sign-in answer did not match. Please try again.")
             val code = result["code"] ?: error("Sign-in was cancelled (${result["error"] ?: "no code"}).")
             val json = postForm(
                 "grant_type" to "authorization_code",
                 "code" to code,
                 "redirect_uri" to redirect,
-                "client_id" to Secrets.CLIENT_ID,
-                "client_secret" to Secrets.CLIENT_SECRET,
+                "client_id" to clientId,
+                "client_secret" to clientSecret,
                 "code_verifier" to verifier,
             )
-            if (json.has("error")) error(json.optString("error_description", json.getString("error")))
-            accessToken = json.getString("access_token")
-            expiresAt = System.currentTimeMillis() + json.optLong("expires_in", 3600) * 1000
-            val refresh = json.optString("refresh_token")
+            if (json.containsKey("error")) error(json["error_description"].text().ifEmpty { json["error"].text() })
+            accessToken = json["access_token"].text()
+            expiresAt = System.currentTimeMillis() + ((json["expires_in"] as? Number)?.toLong() ?: 3600L) * 1000
+            val refresh = json["refresh_token"].text()
             if (refresh.isNotEmpty()) {
                 Files.createDirectories(file.parent)
-                Files.writeString(file, JSONObject().put("refresh_token", refresh).toString())
+                Files.writeString(file, Json.write(mapOf("refresh_token" to refresh)))
             }
         } finally {
             server.stop(0)
         }
     }
 
-    private suspend fun postForm(vararg fields: Pair<String, String>): JSONObject = withContext(Dispatchers.IO) {
+    private fun postForm(vararg fields: Pair<String, String>): Map<String, Any?> {
         val body = fields.joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, "UTF-8")}" }
         val request = HttpRequest.newBuilder(URI("https://oauth2.googleapis.com/token"))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        runCatching { JSONObject(response.body()) }.getOrElse { JSONObject().put("error", "HTTP ${response.statusCode()}") }
+        return runCatching { Json.parse(response.body()).obj() }.getOrNull() ?: mapOf("error" to "HTTP ${response.statusCode()}")
     }
 
     companion object {
         const val SCOPES = "https://www.googleapis.com/auth/spreadsheets " +
-            "https://www.googleapis.com/auth/drive.metadata.readonly"
+            "https://www.googleapis.com/auth/drive.metadata.readonly " +
+            "https://www.googleapis.com/auth/drive.file"
     }
 }

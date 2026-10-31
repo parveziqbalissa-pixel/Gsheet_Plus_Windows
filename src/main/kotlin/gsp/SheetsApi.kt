@@ -1,9 +1,5 @@
 package gsp
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
@@ -22,11 +18,30 @@ data class Tab(val sheetId: Int, val title: String, val rows: Int, val columns: 
 
 data class SpreadsheetInfo(val id: String, val title: String, val tabs: List<Tab>)
 
-/** Reads Google Sheets and the Drive list. Stage 1 only reads. */
-class SheetsApi(private val auth: GoogleAuth) {
+fun colLetter(index: Int): String {
+    var n = index
+    val sb = StringBuilder()
+    while (n >= 0) {
+        sb.append('A' + n % 26)
+        n = n / 26 - 1
+    }
+    return sb.reverse().toString()
+}
+
+fun parseSpreadsheetId(input: String): String? {
+    val text = input.trim()
+    Regex("/spreadsheets/d/([a-zA-Z0-9_-]+)").find(text)?.let { return it.groupValues[1] }
+    return text.takeIf { Regex("[a-zA-Z0-9_-]{20,}").matches(it) }
+}
+
+/**
+ * Talks to Google Sheets and Drive. The functions block, so call them off the screen thread.
+ * Also the real [SheetsGateway] used by the sync.
+ */
+class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
     private val http = HttpClient.newHttpClient()
 
-    suspend fun listSpreadsheets(search: String, filter: SheetFilter, pageToken: String?): FilePage {
+    fun listSpreadsheets(search: String, filter: SheetFilter, pageToken: String?): FilePage {
         val query = StringBuilder("mimeType='application/vnd.google-apps.spreadsheet' and trashed=false")
         when (filter) {
             SheetFilter.ALL -> Unit
@@ -43,58 +58,167 @@ class SheetsApi(private val auth: GoogleAuth) {
                 "&pageSize=50&fields=${enc(fields)}&supportsAllDrives=true&includeItemsFromAllDrives=true",
         )
         if (pageToken != null) url.append("&pageToken=").append(enc(pageToken))
-        val json = get(url.toString())
-        val array = json.optJSONArray("files") ?: JSONArray()
-        val files = List(array.length()) { i ->
-            val f = array.getJSONObject(i)
+        val json = call("GET", url.toString(), null)
+        val files = json["files"].arr().orEmpty().mapNotNull { it.obj() }.map { f ->
             DriveFile(
-                id = f.getString("id"),
-                name = f.optString("name").ifEmpty { "(untitled)" },
-                modified = f.optString("modifiedTime").take(10),
-                owner = if (f.optBoolean("ownedByMe")) "You" else f.optJSONArray("owners")?.optJSONObject(0)?.optString("displayName")?.ifEmpty { null },
+                id = f["id"].text(),
+                name = f["name"].text().ifEmpty { "(untitled)" },
+                modified = f["modifiedTime"].text().take(10),
+                owner = if (f["ownedByMe"] == true) "You" else f["owners"].arr()?.firstOrNull().obj()?.get("displayName").text().ifEmpty { null },
             )
         }
-        return FilePage(files, json.optString("nextPageToken").ifEmpty { null })
+        return FilePage(files, json["nextPageToken"].text().ifEmpty { null })
     }
 
-    suspend fun spreadsheet(id: String): SpreadsheetInfo {
+    fun spreadsheet(id: String): SpreadsheetInfo {
         val fields = "properties.title,sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))"
-        val json = get("https://sheets.googleapis.com/v4/spreadsheets/${enc(id)}?fields=${enc(fields)}")
-        val sheets = json.optJSONArray("sheets") ?: JSONArray()
-        val tabs = List(sheets.length()) { i ->
-            val p = sheets.getJSONObject(i).getJSONObject("properties")
-            val grid = p.optJSONObject("gridProperties")
-            Tab(p.optInt("sheetId"), p.optString("title"), grid?.optInt("rowCount") ?: 0, grid?.optInt("columnCount") ?: 0)
+        val json = call("GET", "https://sheets.googleapis.com/v4/spreadsheets/${enc(id)}?fields=${enc(fields)}", null)
+        val tabs = json["sheets"].arr().orEmpty().mapNotNull { it.obj()?.get("properties").obj() }.map { p ->
+            val grid = p["gridProperties"].obj()
+            Tab(
+                (p["sheetId"] as? Number)?.toInt() ?: 0, p["title"].text(),
+                (grid?.get("rowCount") as? Number)?.toInt() ?: 0, (grid?.get("columnCount") as? Number)?.toInt() ?: 0,
+            )
         }
-        return SpreadsheetInfo(id, json.optJSONObject("properties")?.optString("title").orEmpty(), tabs)
+        return SpreadsheetInfo(id, json["properties"].obj()?.get("title").text(), tabs)
     }
 
-    /** All cells of a tab as text, every row padded to the same width. */
-    suspend fun values(id: String, tabTitle: String): List<List<String>> {
-        val range = "'" + tabTitle.replace("'", "''") + "'"
-        val json = get("https://sheets.googleapis.com/v4/spreadsheets/${enc(id)}/values/${enc(range)}?valueRenderOption=FORMATTED_VALUE")
-        val rows = json.optJSONArray("values") ?: JSONArray()
-        val parsed = List(rows.length()) { r ->
-            val row = rows.getJSONArray(r)
-            List(row.length()) { c -> row.opt(c)?.toString().orEmpty() }
+    // ----- SheetsGateway -----
+
+    override suspend fun read(spreadsheetId: String, tabTitle: String): SheetRead {
+        val range = quoted(tabTitle)
+        val base = "https://sheets.googleapis.com/v4/spreadsheets/${enc(spreadsheetId)}"
+        val raw = call("GET", "$base/values/${enc(range)}?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER", null)
+        val typed = call("GET", "$base/values/${enc(range)}?valueRenderOption=FORMULA", null)
+        val values = raw["values"].arr().orEmpty().map { it.arr().orEmpty() }
+        val formulas = typed["values"].arr().orEmpty().map { row -> row.arr().orEmpty().map { it.text() } }
+        val dates = HashSet<Int>()
+        val validations = HashMap<Int, SheetValidation>()
+        runCatching {
+            val grid = call(
+                "GET",
+                "$base?ranges=${enc(range + "!2:2")}&includeGridData=true&fields=" +
+                    enc("sheets(properties.gridProperties,data.rowData.values(effectiveFormat.numberFormat.type,dataValidation))"),
+                null,
+            )
+            val sheet = grid["sheets"].arr()?.firstOrNull().obj()
+            val cells = sheet?.get("data").arr()?.firstOrNull().obj()?.get("rowData").arr()?.firstOrNull().obj()?.get("values").arr().orEmpty()
+            cells.forEachIndexed { c, cell ->
+                val o = cell.obj() ?: return@forEachIndexed
+                val nf = o["effectiveFormat"].obj()?.get("numberFormat").obj()?.get("type").text()
+                if (nf == "DATE" || nf == "DATE_TIME") dates += c
+                val cond = o["dataValidation"].obj()?.get("condition").obj()
+                when (cond?.get("type").text()) {
+                    "BOOLEAN" -> validations[c] = SheetValidation(true, emptyList())
+                    "ONE_OF_LIST" -> {
+                        val items = cond?.get("values").arr().orEmpty().map { it.obj()?.get("userEnteredValue").text() }.filter { it.isNotEmpty() }
+                        if (items.isNotEmpty()) validations[c] = SheetValidation(false, items)
+                    }
+                }
+            }
         }
-        val width = parsed.maxOfOrNull { it.size } ?: 0
-        return parsed.map { it + List(width - it.size) { "" } }
+        val size = tabSize(spreadsheetId, tabTitle)
+        return SheetRead(
+            if (values.isEmpty()) listOf(emptyList()) else values,
+            if (formulas.isEmpty()) listOf(emptyList()) else formulas,
+            dates, validations, size.first, size.second,
+        )
     }
 
-    private suspend fun get(url: String): JSONObject = withContext(Dispatchers.IO) {
-        val request = HttpRequest.newBuilder(URI(url))
-            .header("Authorization", "Bearer ${auth.token()}")
-            .GET()
-            .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        val body = runCatching { JSONObject(response.body()) }.getOrElse { JSONObject() }
-        if (response.statusCode() !in 200..299) {
-            val message = body.optJSONObject("error")?.optString("message").orEmpty().ifEmpty { "Google returned HTTP ${response.statusCode()}." }
-            throw ApiException(response.statusCode(), message)
-        }
-        body
+    private fun tabSize(spreadsheetId: String, tabTitle: String): Pair<Int, Int> {
+        val tab = spreadsheet(spreadsheetId).tabs.firstOrNull { it.title == tabTitle } ?: return 1000 to 26
+        return tab.rows to tab.columns
     }
+
+    override suspend fun apply(spreadsheetId: String, sheetId: Int, tabTitle: String, ops: WriteOps) {
+        val base = "https://sheets.googleapis.com/v4/spreadsheets/${enc(spreadsheetId)}"
+        val (rows, cols) = tabSize(spreadsheetId, tabTitle)
+        val grow = ArrayList<Any?>()
+        if (ops.needRows > rows) grow += mapOf("appendDimension" to mapOf("sheetId" to sheetId, "dimension" to "ROWS", "length" to ops.needRows - rows))
+        if (ops.needColumns > cols) grow += mapOf("appendDimension" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "length" to ops.needColumns - cols))
+        if (grow.isNotEmpty()) call("POST", "$base:batchUpdate", Json.write(mapOf("requests" to grow)))
+
+        if (ops.cells.isNotEmpty()) {
+            val data = ArrayList<Any?>()
+            for ((r, cells) in ops.cells.entries.groupBy({ it.key.first }, { it.key.second to it.value }).toSortedMap()) {
+                val sorted = cells.sortedBy { it.first }
+                var i = 0
+                while (i < sorted.size) {
+                    var j = i
+                    while (j + 1 < sorted.size && sorted[j + 1].first == sorted[j].first + 1) j++
+                    val start = sorted[i].first
+                    val end = sorted[j].first
+                    data += mapOf(
+                        "range" to quoted(tabTitle) + "!" + colLetter(start) + (r + 1) + ":" + colLetter(end) + (r + 1),
+                        "majorDimension" to "ROWS",
+                        "values" to listOf((i..j).map { sorted[it].second }),
+                    )
+                    i = j + 1
+                }
+            }
+            for (chunk in data.chunked(200)) {
+                call("POST", "$base/values:batchUpdate", Json.write(mapOf("valueInputOption" to "USER_ENTERED", "data" to chunk)))
+            }
+        }
+
+        val requests = ArrayList<Any?>()
+        for (c in ops.hideColumns) {
+            requests += mapOf(
+                "updateDimensionProperties" to mapOf(
+                    "range" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "startIndex" to c, "endIndex" to c + 1),
+                    "properties" to mapOf("hiddenByUser" to true),
+                    "fields" to "hiddenByUser",
+                ),
+            )
+        }
+        for ((c, v) in ops.validations) {
+            val range = mapOf("sheetId" to sheetId, "startRowIndex" to 1, "startColumnIndex" to c, "endColumnIndex" to c + 1)
+            val rule = when {
+                v == null -> null
+                v.checkbox -> mapOf("condition" to mapOf("type" to "BOOLEAN"), "strict" to true, "showCustomUi" to true)
+                else -> mapOf(
+                    "condition" to mapOf("type" to "ONE_OF_LIST", "values" to v.items.map { mapOf("userEnteredValue" to it) }),
+                    "strict" to false, "showCustomUi" to true,
+                )
+            }
+            requests += mapOf("setDataValidation" to (if (rule == null) mapOf("range" to range) else mapOf("range" to range, "rule" to rule)))
+        }
+        for (r in ops.deleteRows.sortedDescending()) {
+            requests += mapOf("deleteDimension" to mapOf("range" to mapOf("sheetId" to sheetId, "dimension" to "ROWS", "startIndex" to r, "endIndex" to r + 1)))
+        }
+        for (c in ops.deleteColumns.sortedDescending()) {
+            requests += mapOf("deleteDimension" to mapOf("range" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "startIndex" to c, "endIndex" to c + 1)))
+        }
+        if (requests.isNotEmpty()) call("POST", "$base:batchUpdate", Json.write(mapOf("requests" to requests)))
+    }
+
+    /** Creates a spreadsheet with one tab; returns its id, url and the tab. */
+    fun createSpreadsheet(title: String, tabTitle: String): Triple<String, String, Tab> {
+        val body = Json.write(mapOf("properties" to mapOf("title" to title), "sheets" to listOf(mapOf("properties" to mapOf("title" to tabTitle)))))
+        val json = call("POST", "https://sheets.googleapis.com/v4/spreadsheets", body)
+        val id = json["spreadsheetId"].text()
+        val url = json["spreadsheetUrl"].text()
+        val p = json["sheets"].arr()?.firstOrNull().obj()?.get("properties").obj()
+        val tab = Tab((p?.get("sheetId") as? Number)?.toInt() ?: 0, p?.get("title").text(), 1000, 26)
+        return Triple(id, url, tab)
+    }
+
+    // ----- plumbing -----
+
+    private fun quoted(tab: String) = "'" + tab.replace("'", "''") + "'"
 
     private fun enc(text: String) = URLEncoder.encode(text, "UTF-8")
+
+    fun call(method: String, url: String, body: String?): Map<String, Any?> {
+        val builder = HttpRequest.newBuilder(URI(url)).header("Authorization", "Bearer ${auth.token()}")
+        if (body != null) builder.header("Content-Type", "application/json")
+        builder.method(method, if (body == null) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofString(body))
+        val response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+        val json = runCatching { Json.parse(response.body()).obj() }.getOrNull() ?: emptyMap()
+        if (response.statusCode() !in 200..299) {
+            val message = json["error"].obj()?.get("message").text().ifEmpty { "Google returned HTTP ${response.statusCode()}." }
+            throw ApiException(response.statusCode(), message)
+        }
+        return json
+    }
 }

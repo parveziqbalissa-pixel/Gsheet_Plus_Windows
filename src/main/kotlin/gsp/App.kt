@@ -1,24 +1,19 @@
 package gsp
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -28,237 +23,188 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 private sealed interface Screen {
-    data object SignIn : Screen
-    data object Pick : Screen
-    data class Tabs(val info: SpreadsheetInfo) : Screen
-    data class Table(val title: String, val header: List<String>, val rows: List<List<String>>) : Screen
-}
-
-private val ID_HEADER = "_gsp_id"
-private val PREVIEW_HEADER = Regex(" preview( \\d+)?$")
-
-@Composable
-fun App() {
-    val auth = remember { GoogleAuth() }
-    val api = remember { SheetsApi(auth) }
-    val scope = rememberCoroutineScope()
-    var screen by remember { mutableStateOf<Screen>(if (auth.isSignedIn()) Screen.Pick else Screen.SignIn) }
-    var busy by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    fun run(message: String, block: suspend () -> Unit) {
-        scope.launch {
-            busy = message
-            error = null
-            try {
-                block()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: NotSignedIn) {
-                screen = Screen.SignIn
-                error = e.message
-            } catch (e: Exception) {
-                error = e.message ?: e.toString()
-            } finally {
-                busy = null
-            }
-        }
-    }
-
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Gsheet_Plus ${Version.NAME}", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            if (screen !is Screen.SignIn) {
-                if (screen !is Screen.Pick) TextButton(onClick = { screen = Screen.Pick }) { Text("All sheets") }
-                TextButton(onClick = { auth.signOut(); screen = Screen.SignIn }) { Text("Sign out") }
-            }
-        }
-        if (busy != null) {
-            Text(busy!!, style = MaterialTheme.typography.labelMedium)
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 8.dp)) }
-
-        when (val current = screen) {
-            Screen.SignIn -> SignInScreen(
-                configured = auth.isConfigured(),
-                enabled = busy == null,
-                onSignIn = { run("Waiting for Google in your browser...") { auth.signIn(); screen = Screen.Pick } },
-            )
-
-            Screen.Pick -> PickScreen(
-                api = api,
-                onError = { error = it },
-                onPick = { file ->
-                    run("Opening \"${file.name}\"...") {
-                        val info = api.spreadsheet(file.id)
-                        screen = if (info.tabs.size == 1) openTab(api, info, info.tabs[0]) else Screen.Tabs(info)
-                    }
-                },
-            )
-
-            is Screen.Tabs -> Column {
-                Text(current.info.title, style = MaterialTheme.typography.titleMedium)
-                Text("Choose a tab:")
-                current.info.tabs.forEach { tab ->
-                    TextButton(onClick = { run("Loading \"${tab.title}\"...") { screen = openTab(api, current.info, tab) } }) {
-                        Text("${tab.title}  (${tab.rows} rows)")
-                    }
-                }
-            }
-
-            is Screen.Table -> TableScreen(current)
-        }
-    }
-}
-
-private suspend fun openTab(api: SheetsApi, info: SpreadsheetInfo, tab: Tab): Screen.Table {
-    val all = api.values(info.id, tab.title)
-    val header = all.firstOrNull().orEmpty()
-    // Hide the app's hidden id column and the picture preview columns, like the phone app does.
-    val keep = header.indices.filter { header[it] != ID_HEADER && !PREVIEW_HEADER.containsMatchIn(header[it]) }
-    val rows = all.drop(1).map { row -> keep.map { row.getOrElse(it) { "" } } }
-    val title = if (info.tabs.size > 1) "${info.title} - ${tab.title}" else info.title
-    return Screen.Table(title, keep.map { header[it] }, rows)
+    object Tables : Screen
+    object Link : Screen
+    class Grid(val id: Long) : Screen
 }
 
 @Composable
-private fun SignInScreen(configured: Boolean, enabled: Boolean, onSignIn: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 24.dp)) {
-        Text("Open your Google Sheets on this PC.", style = MaterialTheme.typography.titleMedium)
-        Text("Your browser opens so you can approve access. Use a Google account that is on the test users list.")
-        if (!configured) {
-            Text(
-                "This build has no Google sign-in key. Add GSP_CLIENT_ID and GSP_CLIENT_SECRET as GitHub secrets and build again.",
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        Button(onClick = onSignIn, enabled = enabled && configured) { Text("Sign in with Google") }
+fun App(c: Controller) {
+    var screen by remember { mutableStateOf<Screen>(Screen.Tables) }
+    when (val s = screen) {
+        Screen.Tables -> TableListScreen(c, onOpen = { screen = Screen.Grid(it) }, onLink = { screen = Screen.Link })
+        Screen.Link -> LinkScreen(c, onBack = { screen = Screen.Tables }, onOpen = { screen = Screen.Grid(it) })
+        is Screen.Grid -> GridScreen(c, s.id, onBack = { screen = Screen.Tables })
     }
 }
 
 @Composable
-private fun PickScreen(api: SheetsApi, onError: (String?) -> Unit, onPick: (DriveFile) -> Unit) {
-    var filter by remember { mutableStateOf(SheetFilter.ALL) }
+private fun TableListScreen(c: Controller, onOpen: (Long) -> Unit, onLink: () -> Unit) {
+    var tick by remember { mutableStateOf(0L) }
+    DisposableEffect(Unit) {
+        val stop = c.ws.changes.listen { tick = it }
+        onDispose { stop() }
+    }
+    val tables = remember(tick) { c.ws.summaries() }
     var search by remember { mutableStateOf("") }
-    var files by remember { mutableStateOf<List<DriveFile>>(emptyList()) }
-    var next by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var reload by remember { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-    var job by remember { mutableStateOf<Job?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<Long?>(null) }
+    var deleting by remember { mutableStateOf<Long?>(null) }
+    val shown = tables.filter { it.name.contains(search, ignoreCase = true) }
+        .sortedWith(compareByDescending<Workspace.Summary> { it.pinned }.thenByDescending { it.updatedAt })
 
-    fun load(append: Boolean) {
-        job?.cancel()
-        job = scope.launch {
-            loading = true
-            onError(null)
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Gsheet_Plus", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            OutlinedTextField(value = search, onValueChange = { search = it }, placeholder = { Text("Search tables") }, singleLine = true, modifier = Modifier.width(260.dp))
+            Button(onClick = { creating = true }) { Text("New table") }
+            Button(onClick = onLink) { Text("Open Google Sheet") }
+            if (c.signedIn.value) TextButton(onClick = { c.signOut() }) { Text("Sign out") }
+        }
+        HorizontalDivider()
+        if (shown.isEmpty()) {
+            Text(
+                if (tables.isEmpty()) "No tables yet. Create one, or open a Google Sheet." else "No table matches.",
+                modifier = Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(shown, key = { it.id }) { t ->
+                var menu by remember { mutableStateOf(false) }
+                ListItem(
+                    modifier = Modifier.clickable { onOpen(t.id) },
+                    headlineContent = { Text((if (t.pinned) "📌 " else "") + t.name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    supportingContent = { Text("${t.rows} rows, ${t.columns} columns" + if (t.linked) " · linked to Google Sheet" else "") },
+                    trailingContent = {
+                        Box {
+                            TextButton(onClick = { menu = true }) { Text("⋮") }
+                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                DropdownMenuItem(text = { Text(if (t.pinned) "Unpin" else "Pin to top") }, onClick = { menu = false; c.ws.setPinned(t.id, !t.pinned) })
+                                DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = t.id })
+                                DropdownMenuItem(text = { Text("Copy table") }, onClick = { menu = false; c.ws.copyTable(t.id, structureOnly = false); c.say("Table copied") })
+                                DropdownMenuItem(text = { Text("Copy structure only") }, onClick = { menu = false; c.ws.copyTable(t.id, structureOnly = true); c.say("Structure copied") })
+                                DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; deleting = t.id })
+                            }
+                        }
+                    },
+                )
+                HorizontalDivider()
+            }
+        }
+    }
+
+    if (creating) NameDialog("New table", "Table name", "Create", "", { name -> creating = false; onOpen(c.ws.createTable(name.ifBlank { "Untitled" })) }, { creating = false })
+    renaming?.let { id ->
+        NameDialog("Rename table", "Table name", "Save", c.ws.grid(id)?.name.orEmpty(), { renaming = null; c.ws.renameTable(id, it) }, { renaming = null })
+    }
+    deleting?.let { id ->
+        ConfirmDialog("Delete table?", "\"${c.ws.grid(id)?.name.orEmpty()}\" will be deleted from this PC. A linked Google Sheet is not touched.", "Delete", { deleting = null; c.ws.deleteTable(id) }, { deleting = null })
+    }
+}
+
+@Composable
+private fun LinkScreen(c: Controller, onBack: () -> Unit, onOpen: (Long) -> Unit) {
+    var filter by remember { mutableStateOf(SheetFilter.ALL) }
+    var query by remember { mutableStateOf("") }
+    var link by remember { mutableStateOf("") }
+    var files by remember { mutableStateOf<List<DriveFile>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf<SpreadsheetInfo?>(null) }
+
+    fun load() {
+        loading = true
+        c.background("Sheet list") {
             try {
-                val page = api.listSpreadsheets(search, filter, if (append) next else null)
-                files = if (append) files + page.files else page.files
-                next = page.next
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                onError(e.message ?: e.toString())
+                files = c.api.listSpreadsheets(query, filter, null).files
             } finally {
                 loading = false
             }
         }
     }
 
-    LaunchedEffect(filter, search, reload) {
-        delay(if (search.isEmpty()) 0 else 350)
-        load(append = false)
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        OutlinedTextField(
-            value = search,
-            onValueChange = { search = it },
-            label = { Text("Search your spreadsheets") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+    fun openTab(info: SpreadsheetInfo, tab: Tab) {
+        val existing = c.ws.tableForSheet(info.id, tab.sheetId)
+        val id = existing ?: c.ws.createLinkedTable(
+            if (info.tabs.size > 1) "${info.title} - ${tab.title}" else info.title,
+            Link(info.id, tab.sheetId, tab.title, "https://docs.google.com/spreadsheets/d/${info.id}/edit#gid=${tab.sheetId}"),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            listOf(SheetFilter.ALL to "All", SheetFilter.MINE to "Mine", SheetFilter.SHARED to "Shared with me").forEach { (f, label) ->
-                FilterChip(selected = filter == f, onClick = { filter = f }, label = { Text(label) })
-            }
-            TextButton(onClick = { reload++ }, enabled = !loading) { Text("Refresh") }
-        }
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        LazyColumn(Modifier.fillMaxWidth()) {
-            items(files, key = { it.id }) { file ->
-                ListItem(
-                    headlineContent = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = { Text(listOfNotNull("Edited ${file.modified}", file.owner).joinToString(" - ")) },
-                    modifier = Modifier.clickable { onPick(file) },
-                )
-                HorizontalDivider()
-            }
-            item {
-                if (next != null) {
-                    TextButton(onClick = { load(append = true) }, enabled = !loading) { Text("Load more") }
-                } else if (!loading && files.isEmpty()) {
-                    Text(
-                        if (filter == SheetFilter.SHARED) "No spreadsheets have been shared with you." else "No spreadsheets found.",
-                        modifier = Modifier.padding(vertical = 16.dp),
-                    )
-                }
+        c.syncNow(id)
+        onOpen(id)
+    }
+
+    fun choose(spreadsheetId: String) {
+        loading = true
+        c.background("Open Sheet") {
+            try {
+                val info = c.api.spreadsheet(spreadsheetId)
+                if (info.tabs.size == 1) openTab(info, info.tabs[0]) else picked = info
+            } finally {
+                loading = false
             }
         }
     }
-}
 
-@Composable
-private fun TableScreen(table: Screen.Table) {
-    val scroll = rememberScrollState()
-    val cellWidth = 170.dp
-    Column(Modifier.fillMaxSize()) {
-        Text(table.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
-        Text("${table.rows.size} rows. Read-only in this first version.", style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(8.dp))
-        SelectionContainer {
-            Column(Modifier.fillMaxSize().horizontalScroll(scroll)) {
-                Row {
-                    Box(Modifier.width(48.dp).height(36.dp).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                        .background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) { Text("#") }
-                    table.header.forEach { name ->
-                        Box(Modifier.width(cellWidth).height(36.dp).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                            .background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
-                            Text(name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("‹ Tables") }
+            Text("Open a Google Sheet", style = MaterialTheme.typography.titleLarge)
+        }
+        if (!c.auth.isConfigured()) {
+            Text("This build has no Google client id. Add the GSP_CLIENT_ID and GSP_CLIENT_SECRET secrets in GitHub and build again.", color = MaterialTheme.colorScheme.error)
+        } else if (!c.signedIn.value) {
+            Text("Sign in with Google to see your Sheets. A browser window opens; come back here when it says you can close it.")
+            Button(onClick = { c.signIn { load() } }) { Text("Sign in with Google") }
+        } else {
+            val tabs = picked
+            if (tabs != null) {
+                Text("${tabs.title} has several tabs. Pick one:", style = MaterialTheme.typography.titleMedium)
+                LazyColumn(Modifier.weight(1f)) {
+                    items(tabs.tabs, key = { it.sheetId }) { t ->
+                        ListItem(modifier = Modifier.clickable { openTab(tabs, t) }, headlineContent = { Text(t.title) }, supportingContent = { Text("${t.rows} rows, ${t.columns} columns") })
+                        HorizontalDivider()
                     }
                 }
-                LazyColumn(Modifier.fillMaxSize()) {
-                    items(table.rows.size) { index ->
-                        Row {
-                            Box(Modifier.width(48.dp).height(34.dp).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                                .background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) { Text("${index + 1}") }
-                            table.rows[index].forEach { value ->
-                                Box(Modifier.width(cellWidth).height(34.dp).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                                    .padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
-                                    Text(value.replace('\n', ' '), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
+                TextButton(onClick = { picked = null }) { Text("Back to the list") }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(value = link, onValueChange = { link = it }, placeholder = { Text("Paste a Sheet link") }, singleLine = true, modifier = Modifier.weight(1f))
+                    Button(
+                        enabled = parseSpreadsheetId(link) != null,
+                        onClick = { parseSpreadsheetId(link)?.let { choose(it) } },
+                    ) { Text("Open link") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SheetFilter.entries.forEach { f ->
+                        FilterChip(
+                            selected = filter == f, onClick = { filter = f; load() },
+                            label = { Text(when (f) { SheetFilter.ALL -> "All"; SheetFilter.MINE -> "Mine"; SheetFilter.SHARED -> "Shared with me" }) },
+                        )
+                    }
+                    OutlinedTextField(value = query, onValueChange = { query = it }, placeholder = { Text("Search by name") }, singleLine = true, modifier = Modifier.weight(1f))
+                    Button(onClick = { load() }) { Text("Search") }
+                }
+                if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (files.isEmpty() && !loading) Text("Press Search to list your Sheets.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LazyColumn(Modifier.weight(1f)) {
+                    items(files, key = { it.id }) { f ->
+                        ListItem(
+                            modifier = Modifier.clickable { choose(f.id) },
+                            headlineContent = { Text(f.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            supportingContent = { Text(listOfNotNull(f.owner?.let { "Owner: $it" }, f.modified.take(10)).joinToString(" · ")) },
+                        )
+                        HorizontalDivider()
                     }
                 }
             }
