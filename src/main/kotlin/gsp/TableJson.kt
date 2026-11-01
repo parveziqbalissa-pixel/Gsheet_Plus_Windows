@@ -5,6 +5,7 @@ object TableJson {
     fun write(t: TableData): String = Json.write(
         linkedMapOf(
             "id" to t.id, "name" to t.name, "pinned" to t.pinned, "updatedAt" to t.updatedAt, "nextId" to t.nextId,
+            "createdAt" to t.createdAt, "hiddenColumns" to t.hiddenColumns.toList(),
             "link" to t.link?.let {
                 linkedMapOf("spreadsheetId" to it.spreadsheetId, "sheetId" to it.sheetId, "tabTitle" to it.tabTitle, "url" to it.url, "lastSyncedAt" to it.lastSyncedAt)
             },
@@ -62,6 +63,8 @@ object TableJson {
         val o = Json.parse(json).obj() ?: error("Not a table file")
         val t = TableData(o["id"].long(), o["name"].text())
         t.pinned = o["pinned"].bool()
+        t.createdAt = (o["createdAt"] as? Number)?.toLong() ?: o["updatedAt"].long()
+        o["hiddenColumns"].arr().orEmpty().forEach { (it as? Number)?.toLong()?.let { id -> t.hiddenColumns += id } }
         t.updatedAt = o["updatedAt"].long()
         t.nextId = o["nextId"].long().coerceAtLeast(1)
         o["link"].obj()?.let {

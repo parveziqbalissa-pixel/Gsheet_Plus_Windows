@@ -68,8 +68,8 @@ private fun TableListScreen(c: Controller, onOpen: (Long) -> Unit, onLink: () ->
     var binOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<Long?>(null) }
     var deleting by remember { mutableStateOf<Long?>(null) }
-    val shown = tables.filter { it.name.contains(search, ignoreCase = true) }
-        .sortedWith(compareByDescending<Workspace.Summary> { it.pinned }.thenByDescending { it.updatedAt })
+    val shown = sortSummaries(tables.filter { it.name.contains(search, ignoreCase = true) }, c.tableSort.value)
+    var viewMenu by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -77,6 +77,25 @@ private fun TableListScreen(c: Controller, onOpen: (Long) -> Unit, onLink: () ->
             OutlinedTextField(value = search, onValueChange = { search = it }, placeholder = { Text("Search tables") }, singleLine = true, modifier = Modifier.width(260.dp))
             Button(onClick = { creating = true }) { Text("New table") }
             Button(onClick = onLink) { Text("Open Google Sheet") }
+            Box {
+                TextButton(onClick = { viewMenu = true }) { Text("View ▾") }
+                DropdownMenu(expanded = viewMenu, onDismissRequest = { viewMenu = false }) {
+                    Text("Show as", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                    TableViews.forEach { (key, label) ->
+                        DropdownMenuItem(text = { Text((if (c.tableView.value == key) "✓ " else "    ") + label) }, onClick = { viewMenu = false; c.setTableLook(view = key) })
+                    }
+                    HorizontalDivider()
+                    Text("Sort by", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                    TableSorts.forEach { (key, label) ->
+                        DropdownMenuItem(text = { Text((if (c.tableSort.value == key) "✓ " else "    ") + label) }, onClick = { viewMenu = false; c.setTableLook(sort = key) })
+                    }
+                    HorizontalDivider()
+                    Row {
+                        TextButton(onClick = { c.setTableLook(zoom = c.tableZoom.value - 0.15f) }) { Text("−  Smaller") }
+                        TextButton(onClick = { c.setTableLook(zoom = c.tableZoom.value + 0.15f) }) { Text("+  Bigger") }
+                    }
+                }
+            }
             TextButton(onClick = { binOpen = true }) { Text("Bin") }
             if (c.hasPin.value) TextButton(onClick = { c.lockNow() }) { Text("Lock") }
             TextButton(onClick = onSettings) { Text("Settings") }
@@ -88,29 +107,27 @@ private fun TableListScreen(c: Controller, onOpen: (Long) -> Unit, onLink: () ->
                 modifier = Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(shown, key = { it.id }) { t ->
+        TablesBody(
+            tables = shown,
+            view = c.tableView.value,
+            zoom = c.tableZoom.value,
+            sort = c.tableSort.value,
+            onSort = { c.setTableLook(sort = it) },
+            onOpen = { onOpen(it.id) },
+            menu = { t ->
                 var menu by remember { mutableStateOf(false) }
-                ListItem(
-                    modifier = Modifier.clickable { onOpen(t.id) },
-                    headlineContent = { Text((if (t.pinned) "📌 " else "") + t.name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = { Text("${t.rows} rows, ${t.columns} columns" + if (t.linked) " · linked to Google Sheet" else "") },
-                    trailingContent = {
-                        Box {
-                            TextButton(onClick = { menu = true }) { Text("⋮") }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text(if (t.pinned) "Unpin" else "Pin to top") }, onClick = { menu = false; c.ws.setPinned(t.id, !t.pinned) })
-                                DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = t.id })
-                                DropdownMenuItem(text = { Text("Copy table") }, onClick = { menu = false; c.ws.copyTable(t.id, structureOnly = false); c.say("Table copied") })
-                                DropdownMenuItem(text = { Text("Copy structure only") }, onClick = { menu = false; c.ws.copyTable(t.id, structureOnly = true); c.say("Structure copied") })
-                                DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; deleting = t.id })
-                            }
-                        }
-                    },
-                )
-                HorizontalDivider()
-            }
-        }
+                Box {
+                    TextButton(onClick = { menu = true }) { Text("⋮") }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text(if (t.pinned) "Unpin" else "Pin to top") }, onClick = { menu = false; c.ws.setPinned(t.id, !t.pinned) })
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = t.id })
+                        DropdownMenuItem(text = { Text("Copy table") }, onClick = { menu = false; c.ws.copyTable(t.id, structureOnly = false); c.say("Table copied") })
+                        DropdownMenuItem(text = { Text("Copy structure only") }, onClick = { menu = false; c.ws.copyTable(t.id, structureOnly = true); c.say("Structure copied") })
+                        DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; deleting = t.id })
+                    }
+                }
+            },
+        )
     }
 
     if (creating) {

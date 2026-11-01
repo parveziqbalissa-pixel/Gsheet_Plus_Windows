@@ -102,6 +102,20 @@ class Controller(private val scope: CoroutineScope) {
         }
     }
 
+    val tableView = mutableStateOf(settings.tableView)
+    val tableZoom = mutableStateOf(settings.tableZoom)
+    val tableSort = mutableStateOf(settings.tableSort)
+
+    fun setTableLook(view: String = tableView.value, zoom: Float = tableZoom.value, sort: String = tableSort.value) {
+        tableView.value = view
+        tableZoom.value = zoom.coerceIn(0.7f, 1.6f)
+        tableSort.value = sort
+        settings.tableView = view
+        settings.tableZoom = tableZoom.value
+        settings.tableSort = sort
+        settings.save()
+    }
+
     fun setPictureRows(value: Int) {
         pictureRows.value = value
         settings.pictureRows = value

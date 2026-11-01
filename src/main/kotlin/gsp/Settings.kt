@@ -16,6 +16,9 @@ class AppSettings(private val file: Path) {
     var dailyBackup: Boolean = true
     var pinSalt: String? = null
     var pinHash: String? = null
+    var tableView: String = "LIST"
+    var tableZoom: Float = 1f
+    var tableSort: String = "MODIFIED"
 
     init {
         runCatching {
@@ -30,6 +33,9 @@ class AppSettings(private val file: Path) {
                 dailyBackup = o["dailyBackup"] != false
                 pinSalt = o["pinSalt"] as? String
                 pinHash = o["pinHash"] as? String
+                tableView = (o["tableView"] as? String) ?: "LIST"
+                tableZoom = ((o["tableZoom"] as? Number)?.toFloat() ?: 1f).coerceIn(0.7f, 1.6f)
+                tableSort = (o["tableSort"] as? String) ?: "MODIFIED"
             }
         }
     }
@@ -41,6 +47,7 @@ class AppSettings(private val file: Path) {
                 "syncSeconds" to syncSeconds, "dark" to dark, "pictureRows" to pictureRows,
                 "reportBusiness" to reportBusiness, "reportLine2" to reportLine2, "reportLogo" to reportLogo,
                 "dailyBackup" to dailyBackup, "pinSalt" to pinSalt, "pinHash" to pinHash,
+                "tableView" to tableView, "tableZoom" to tableZoom.toDouble(), "tableSort" to tableSort,
             )))
         }
     }

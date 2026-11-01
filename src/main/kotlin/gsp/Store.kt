@@ -86,6 +86,9 @@ class Conflict(val id: Long, val columnName: String, val kept: String, val lost:
 class TableData(val id: Long, var name: String) {
     var pinned = false
     var updatedAt = System.currentTimeMillis()
+    var createdAt = System.currentTimeMillis()
+    /** Columns hidden in this app (Manage columns); they still sync. */
+    val hiddenColumns = HashSet<Long>()
     val columns = ArrayList<Col>()
     val rows = ArrayList<Row>()
     val attachments = ArrayList<Attachment>()
@@ -150,10 +153,16 @@ class Workspace(val dir: Path) {
 
     // ----- reading -----
 
-    class Summary(val id: Long, val name: String, val updatedAt: Long, val rows: Int, val columns: Int, val linked: Boolean, val pinned: Boolean)
+    class Summary(
+        val id: Long, val name: String, val updatedAt: Long, val rows: Int, val columns: Int, val linked: Boolean, val pinned: Boolean,
+        val createdAt: Long = updatedAt, val cover: Attachment? = null,
+    )
 
     fun summaries(): List<Summary> = synchronized(lock) {
-        tableList.map { Summary(it.id, it.name, it.updatedAt, it.rows.size, it.columns.size, it.link != null, it.pinned) }
+        tableList.map { t ->
+            val cover = t.attachments.firstOrNull { it.mime.startsWith("image/") && (it.localPath != null || it.driveId != null) }
+            Summary(t.id, t.name, t.updatedAt, t.rows.size, t.columns.size, t.link != null, t.pinned, t.createdAt, cover)
+        }
             .sortedWith(compareByDescending<Summary> { it.pinned }.thenByDescending { it.updatedAt })
     }
 
@@ -290,6 +299,14 @@ class Workspace(val dir: Path) {
     fun deleteView(tableId: Long, name: String) = synchronized(lock) {
         val table = find(tableId) ?: return@synchronized
         table.views.removeAll { it.name == name }
+        touch(table, stamp = false)
+    }
+
+    fun hiddenColumns(tableId: Long): Set<Long> = synchronized(lock) { find(tableId)?.hiddenColumns?.toSet().orEmpty() }
+
+    fun setColumnHidden(tableId: Long, columnId: Long, hidden: Boolean) = synchronized(lock) {
+        val table = find(tableId) ?: return@synchronized
+        if (hidden) table.hiddenColumns += columnId else table.hiddenColumns -= columnId
         touch(table, stamp = false)
     }
 

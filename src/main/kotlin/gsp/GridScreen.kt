@@ -121,7 +121,9 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     var viewsMenu by remember { mutableStateOf(false) }
     var view by remember { mutableStateOf(ViewOptions()) }
     val shown = remember(grid, view) { applyView(grid, view) }
-    val columns = remember(grid.columns) { grid.columns.sortedBy { if (it.pinned) 0 else 1 } }
+    val hiddenColumns = remember(tick) { c.ws.hiddenColumns(tableId) }
+    val columns = remember(grid.columns, hiddenColumns) { grid.columns.filter { it.id !in hiddenColumns }.sortedBy { if (it.pinned) 0 else 1 } }
+    var manageColumns by remember { mutableStateOf(false) }
     val groupColumn = view.groupBy?.let { id -> columns.firstOrNull { it.id == id } }
     val groups = remember(shown, groupColumn) {
         groupColumn?.let { gc -> shown.rows.groupBy { it.values[gc.id].orEmpty().ifEmpty { "(empty)" } }.entries.toList() }
@@ -291,7 +293,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             onMenuPaste = { pasteAtSelection() },
             onMenuClear = { clearSelection() },
             onMenuEdit = { colId -> startEdit(row.id, colId) },
-            onRowSelect = { sel = Sel(row.id, columns.first().id, row.id, columns.last().id); focus.requestFocus() },
+            onRowSelect = { if (columns.isNotEmpty()) sel = Sel(row.id, columns.first().id, row.id, columns.last().id); focus.requestFocus() },
             onOpenRow = { rowPage = row.id },
             paint = paintRow(row, columns, rules),
             onCopyRow = {
@@ -381,6 +383,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             Box {
                 TextButton(onClick = { moreMenu = true }) { Text("More ▾") }
                 DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                    DropdownMenuItem(text = { Text("Manage columns") }, onClick = { moreMenu = false; manageColumns = true })
                     DropdownMenuItem(text = { Text("Rename table") }, onClick = { moreMenu = false; renamingTable = true })
                     DropdownMenuItem(text = { Text("Export CSV") }, onClick = { moreMenu = false; Export.csv(c, grid, shown) })
                     DropdownMenuItem(text = { Text("Export Excel (.xlsx)") }, onClick = { moreMenu = false; Export.xlsx(c, grid, shown) })
@@ -680,6 +683,13 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
                 c.ws.setColumnWidth(tableId, col.id, w)
             }
         }, { widthColumn = null })
+    }
+    if (manageColumns) {
+        ManageColumnsDialog(
+            c, tableId, grid.columns, hiddenColumns,
+            onEdit = { editingColumn = it }, onDelete = { deletingColumn = it }, onAdd = { addingColumn = true },
+            onDismiss = { manageColumns = false },
+        )
     }
     rowPage?.let { id ->
         RowPageDialog(c, tableId, id, onAttachments = { col -> attachTarget = id to col }, onDismiss = { rowPage = null })
