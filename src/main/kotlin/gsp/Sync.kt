@@ -96,6 +96,8 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             fun usable(i: Int) = i !in used && header[i].isNotEmpty() && header[i] != ID_HEADER && !PREVIEW_HEADER.containsMatchIn(header[i])
             val positionBefore = HashMap<Long, Int?>()
             for (col in table.columns) positionBefore[col.id] = col.sheetIndex
+            // Columns synced by an older version have no remembered position yet: take the Sheet's order once.
+            val legacyOrder = table.columns.any { it.sheetName != null && it.sheetIndex == null }
             val unresolved = ArrayList<Col>()
             // Pass 1: columns whose header text is still where we left it, or has moved elsewhere unchanged.
             for (col in table.columns) {
@@ -165,7 +167,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                 }
             }
             // Remember each column's Sheet position; when the Sheet's order changed, the app's order follows it.
-            val movedInSheet = table.columns.any { c ->
+            val movedInSheet = legacyOrder || toCreate.isNotEmpty() || table.columns.any { c ->
                 val before = positionBefore[c.id]
                 before != null && sheetIndex[c.id] != null && sheetIndex[c.id] != before
             }
