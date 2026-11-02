@@ -93,17 +93,34 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             used += idCol
             val sheetIndex = HashMap<Long, Int>()
             val removeCols = ArrayList<Col>()
+            fun usable(i: Int) = i !in used && header[i].isNotEmpty() && header[i] != ID_HEADER && !PREVIEW_HEADER.containsMatchIn(header[i])
+            val positionBefore = HashMap<Long, Int?>()
+            for (col in table.columns) positionBefore[col.id] = col.sheetIndex
+            val unresolved = ArrayList<Col>()
+            // Pass 1: columns whose header text is still where we left it, or has moved elsewhere unchanged.
             for (col in table.columns) {
-                val wanted = col.sheetName ?: col.name
-                var idx = header.indices.firstOrNull { it !in used && header[it] == wanted }
-                if (idx == null && col.sheetName != null) idx = header.indices.firstOrNull { it !in used && header[it] == col.name }
+                val known = col.sheetName
+                val wanted = known ?: col.name
+                val here = col.sheetIndex?.takeIf { it in header.indices && it !in used && header[it] == wanted }
+                var idx = here ?: header.indices.firstOrNull { it !in used && header[it] == wanted }
+                if (idx == null && known != null) idx = header.indices.firstOrNull { it !in used && header[it] == col.name }
                 if (idx != null) {
                     used += idx
                     sheetIndex[col.id] = idx
-                    if (col.sheetName != null && header[idx] == col.sheetName && col.name != col.sheetName) {
+                    if (known != null && header[idx] == known && col.name != known) {
                         ops.cells[0 to idx] = col.name   // renamed in the app
                     }
                     col.sheetName = col.name
+                } else unresolved += col
+            }
+            // Pass 2: the old header text is gone. A header at the column's old position is a rename made in the Sheet.
+            for (col in unresolved) {
+                val old = col.sheetIndex
+                if (col.sheetName != null && old != null && old in header.indices && usable(old)) {
+                    used += old
+                    sheetIndex[col.id] = old
+                    col.name = header[old]          // the Sheet's new name wins
+                    col.sheetName = header[old]
                 } else if (col.sheetName != null) {
                     removeCols += col          // deleted in the Sheet
                 } else {
@@ -147,6 +164,13 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                     used += i
                 }
             }
+            // Remember each column's Sheet position; when the Sheet's order changed, the app's order follows it.
+            val movedInSheet = table.columns.any { c ->
+                val before = positionBefore[c.id]
+                before != null && sheetIndex[c.id] != null && sheetIndex[c.id] != before
+            }
+            for (c in table.columns) c.sheetIndex = sheetIndex[c.id]
+            if (movedInSheet) table.columns.sortWith(compareBy { sheetIndex[it.id] ?: Int.MAX_VALUE })
             // Validation for LIST and CHECKBOX columns the app owns.
             for (col in table.columns) {
                 val idx = sheetIndex[col.id] ?: continue

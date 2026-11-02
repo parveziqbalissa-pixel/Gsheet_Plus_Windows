@@ -27,6 +27,8 @@ class Col(
     var sheetName: String? = null,
     /** The validation last pushed to the Sheet for this column. */
     var sig: String? = null,
+    /** The 0-based position this column had in the linked Sheet at the last sync. */
+    var sheetIndex: Int? = null,
 ) {
     fun toGrid() = GridColumn(
         id, name, type, width, prefix, suffix, defaultValue, listItems, formula,
