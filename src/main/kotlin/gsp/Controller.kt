@@ -213,7 +213,7 @@ class Controller(private val scope: CoroutineScope) {
                 }
                 status.value = "Synced " + java.time.LocalTime.now().withNano(0)
                 if (uploadError != null) say(uploadError)
-                else if (announce || result.conflicts > 0) say(result.message())
+                else if (announce || result.conflicts > 0 || result.columnMoves > 0 || result.orderFromSheet) say(result.message())
             } catch (e: NotSignedIn) {
                 signedIn.value = false
                 status.value = "Sign in to sync"

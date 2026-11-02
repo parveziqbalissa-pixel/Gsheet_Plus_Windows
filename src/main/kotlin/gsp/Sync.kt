@@ -22,12 +22,14 @@ class WriteOps(
     val deleteRows: MutableList<Int> = ArrayList(),
     val deleteColumns: MutableList<Int> = ArrayList(),
     val hideColumns: MutableList<Int> = ArrayList(),
+    /** Column moves, applied last, in order: (from, destinationIndex) as in the Sheets API moveDimension. */
+    val moveColumns: MutableList<Pair<Int, Int>> = ArrayList(),
     /** column -> validation to set (null removes it) */
     val validations: MutableMap<Int, SheetValidation?> = HashMap(),
     var needRows: Int = 0,
     var needColumns: Int = 0,
 ) {
-    fun isEmpty() = cells.isEmpty() && deleteRows.isEmpty() && deleteColumns.isEmpty() && hideColumns.isEmpty() && validations.isEmpty()
+    fun isEmpty() = cells.isEmpty() && deleteRows.isEmpty() && deleteColumns.isEmpty() && hideColumns.isEmpty() && moveColumns.isEmpty() && validations.isEmpty()
 }
 
 interface SheetsGateway {
@@ -35,8 +37,11 @@ interface SheetsGateway {
     suspend fun apply(spreadsheetId: String, sheetId: Int, tabTitle: String, ops: WriteOps)
 }
 
-class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int) {
-    fun message(): String = "Synced: $pulled from the Sheet, $pushed sent" + if (conflicts > 0) ", $conflicts conflict(s) (see Sync history)" else ""
+class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int, val columnMoves: Int = 0, val orderFromSheet: Boolean = false) {
+    fun message(): String = "Synced: $pulled from the Sheet, $pushed sent" +
+        (if (conflicts > 0) ", $conflicts conflict(s) (see Sync history)" else "") +
+        (if (columnMoves > 0) ", column order sent to the Sheet ($columnMoves move(s))" else "") +
+        (if (orderFromSheet) ", column order taken from the Sheet" else "")
 }
 
 /** Text to write into a sheet cell so Google keeps it as typed (no number, date or formula guessing for text columns). */
@@ -71,6 +76,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
         val conflictsFound = ArrayList<Triple<String, String, String>>()
         val tombstonesAtPlan = HashSet<String>()
         val columnTombstonesAtPlan = HashSet<String>()
+        var orderFromSheet = false
         var pushed = 0
         var pulled = 0
 
@@ -167,12 +173,39 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                 }
             }
             // Remember each column's Sheet position; when the Sheet's order changed, the app's order follows it.
-            val movedInSheet = legacyOrder || toCreate.isNotEmpty() || table.columns.any { c ->
-                val before = positionBefore[c.id]
-                before != null && sheetIndex[c.id] != null && sheetIndex[c.id] != before
+            // Column order. A move made in the app is sent to the Sheet; a move made in the Sheet is taken over.
+            val mapped = table.columns.filter { positionBefore[it.id] != null && sheetIndex[it.id] != null }
+            val appMoved = !legacyOrder && toCreate.isEmpty() &&
+                mapped.map { it.id } != mapped.sortedBy { positionBefore[it.id] }.map { it.id }
+            val deletedAt = ops.deleteColumns.toSet()
+            fun after(i: Int) = i - deletedAt.count { it < i }
+            if (appMoved) {
+                val size = maxOf(width, nextColumn, (sheetIndex.values.maxOrNull() ?: -1) + 1)
+                val current = (0 until size).filter { it !in deletedAt }.toMutableList()
+                val wanted = mapped.map { sheetIndex.getValue(it.id) }
+                val mappedTokens = wanted.toSet()
+                for (k in wanted.indices) {
+                    val slots = current.withIndex().filter { it.value in mappedTokens }.map { it.index }
+                    val target = slots[k]
+                    val from = current.indexOf(wanted[k])
+                    if (from < 0 || from == target) continue
+                    val moved = current.removeAt(from)
+                    current.add(target, moved)
+                    ops.moveColumns += from to (if (from < target) target + 1 else target)
+                }
+                for (c in table.columns) c.sheetIndex = sheetIndex[c.id]?.let { current.indexOf(it) }?.takeIf { it >= 0 }
+            } else {
+                val movedInSheet = legacyOrder || toCreate.isNotEmpty() || table.columns.any { c ->
+                    val before = positionBefore[c.id]
+                    before != null && sheetIndex[c.id] != null && sheetIndex[c.id] != before
+                }
+                for (c in table.columns) c.sheetIndex = sheetIndex[c.id]?.let { after(it) }
+                if (movedInSheet) {
+                    val before = table.columns.map { it.id }
+                    table.columns.sortWith(compareBy { it.sheetIndex ?: Int.MAX_VALUE })
+                    if (table.columns.map { it.id } != before) orderFromSheet = true
+                }
             }
-            for (c in table.columns) c.sheetIndex = sheetIndex[c.id]
-            if (movedInSheet) table.columns.sortWith(compareBy { sheetIndex[it.id] ?: Int.MAX_VALUE })
             // Validation for LIST and CHECKBOX columns the app owns.
             for (col in table.columns) {
                 val idx = sheetIndex[col.id] ?: continue
@@ -352,6 +385,6 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             table.rows.addAll(sorted)
             table.link?.lastSyncedAt = System.currentTimeMillis()
         }
-        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size)
+        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet)
     }
 }

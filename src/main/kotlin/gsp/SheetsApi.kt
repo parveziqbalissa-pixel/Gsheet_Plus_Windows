@@ -197,6 +197,14 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
         for (c in ops.deleteColumns.sortedDescending()) {
             requests += mapOf("deleteDimension" to mapOf("range" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "startIndex" to c, "endIndex" to c + 1)))
         }
+        for ((from, destination) in ops.moveColumns) {
+            requests += mapOf(
+                "moveDimension" to mapOf(
+                    "source" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "startIndex" to from, "endIndex" to from + 1),
+                    "destinationIndex" to destination,
+                ),
+            )
+        }
         if (requests.isNotEmpty()) call("POST", "$base:batchUpdate", Json.write(mapOf("requests" to requests)))
     }
 
