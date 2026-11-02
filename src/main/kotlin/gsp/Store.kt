@@ -29,6 +29,8 @@ class Col(
     var sig: String? = null,
     /** The 0-based position this column had in the linked Sheet at the last sync. */
     var sheetIndex: Int? = null,
+    /** The date/time format this column last had in the Sheet: "DATE", "TIME" or "" (null until synced). */
+    var fmt: String? = null,
 ) {
     fun toGrid() = GridColumn(
         id, name, type, width, prefix, suffix, defaultValue, listItems, formula,

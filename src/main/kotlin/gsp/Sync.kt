@@ -14,6 +14,8 @@ class SheetRead(
     /** Size of the tab's grid. */
     val gridRows: Int,
     val gridColumns: Int,
+    /** Columns formatted as times in the Sheet. */
+    val timeColumns: Set<Int> = emptySet(),
 )
 
 /** Changes to make in the sheet. Row and column numbers are 0-based; row 0 is the header. */
@@ -24,17 +26,25 @@ class WriteOps(
     val hideColumns: MutableList<Int> = ArrayList(),
     /** Column moves, applied last, in order: (from, destinationIndex) as in the Sheets API moveDimension. */
     val moveColumns: MutableList<Pair<Int, Int>> = ArrayList(),
+    /** column -> number format to set: "DATE", "TIME", or "" to clear it */
+    val formats: MutableMap<Int, String> = HashMap(),
     /** column -> validation to set (null removes it) */
     val validations: MutableMap<Int, SheetValidation?> = HashMap(),
     var needRows: Int = 0,
     var needColumns: Int = 0,
 ) {
-    fun isEmpty() = cells.isEmpty() && deleteRows.isEmpty() && deleteColumns.isEmpty() && hideColumns.isEmpty() && moveColumns.isEmpty() && validations.isEmpty()
+    fun isEmpty() = cells.isEmpty() && deleteRows.isEmpty() && deleteColumns.isEmpty() && hideColumns.isEmpty() && moveColumns.isEmpty() && formats.isEmpty() && validations.isEmpty()
 }
 
 interface SheetsGateway {
     suspend fun read(spreadsheetId: String, tabTitle: String): SheetRead
     suspend fun apply(spreadsheetId: String, sheetId: Int, tabTitle: String, ops: WriteOps)
+}
+
+/** Turns a number stored by an older text/number column into a date or time text. */
+fun dateTimeText(v: String, type: ColumnType): String {
+    val n = v.toDoubleOrNull() ?: return v
+    return SheetImport.convert(n, type).ifEmpty { v }
 }
 
 class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int, val columnMoves: Int = 0, val orderFromSheet: Boolean = false) {
@@ -204,6 +214,33 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                     val before = table.columns.map { it.id }
                     table.columns.sortWith(compareBy { it.sheetIndex ?: Int.MAX_VALUE })
                     if (table.columns.map { it.id } != before) orderFromSheet = true
+                }
+            }
+            // Date and time columns: the Sheet's number format and the app's column type follow each other.
+            for (col in table.columns) {
+                val idx = sheetIndex[col.id] ?: continue
+                if (col.readOnly || col.type == ColumnType.CALC || col.type.isAttachment) continue
+                val sheetKind = when (idx) { in read.dateColumns -> "DATE"; in read.timeColumns -> "TIME"; else -> "" }
+                val appKind = when (col.type) { ColumnType.DATE -> "DATE"; ColumnType.TIME -> "TIME"; else -> "" }
+                if (col.fmt != sheetKind) {
+                    // First look at this column, or the Sheet's format changed: the Sheet decides.
+                    if (sheetKind != "" && (col.type == ColumnType.TEXT || col.type == ColumnType.NUMBER || col.type == ColumnType.DATE || col.type == ColumnType.TIME)) {
+                        val newType = if (sheetKind == "DATE") ColumnType.DATE else ColumnType.TIME
+                        if (col.type != newType) {
+                            for (row in table.rows) {
+                                row.values[col.id]?.let { v -> row.values[col.id] = dateTimeText(v, newType) }
+                                row.base?.get(col.id)?.let { v -> row.base!![col.id] = dateTimeText(v, newType) }
+                            }
+                            col.type = newType
+                        }
+                        col.fmt = sheetKind
+                    } else if (sheetKind == "" && col.fmt == null && appKind != "") {
+                        ops.formats[idx] = appKind      // first sync of a date/time column made in the app
+                        col.fmt = appKind
+                    } else col.fmt = sheetKind
+                } else if (appKind != sheetKind) {
+                    ops.formats[idx] = appKind          // the type was changed in the app
+                    col.fmt = appKind
                 }
             }
             // Validation for LIST and CHECKBOX columns the app owns.

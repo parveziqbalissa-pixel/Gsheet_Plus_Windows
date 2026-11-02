@@ -16,7 +16,7 @@ object TableJson {
                     "id" to it.id, "name" to it.name, "type" to it.type.name, "width" to it.width, "prefix" to it.prefix,
                     "suffix" to it.suffix, "defaultValue" to it.defaultValue, "listItems" to it.listItems, "formula" to it.formula,
                     "readOnly" to it.readOnly, "bgColor" to it.bgColor, "textColor" to it.textColor, "bold" to it.bold,
-                    "italic" to it.italic, "pinned" to it.pinned, "sheetName" to it.sheetName, "sig" to it.sig, "sheetIndex" to it.sheetIndex,
+                    "italic" to it.italic, "pinned" to it.pinned, "sheetName" to it.sheetName, "sig" to it.sig, "sheetIndex" to it.sheetIndex, "fmt" to it.fmt,
                 )
             },
             "rows" to t.rows.map {
@@ -77,7 +77,7 @@ object TableJson {
                 c["id"].long(), c["name"].text(), ColumnType.fromName(c["type"].text()), c["width"].intOrNull() ?: 160,
                 c["prefix"].text(), c["suffix"].text(), c["defaultValue"].text(), c["listItems"].strs(), c["formula"].text(),
                 c["readOnly"].bool(), c["bgColor"].intOrNull(), c["textColor"].intOrNull(), c["bold"].bool(), c["italic"].bool(),
-                c["pinned"].bool(), (c["sheetName"] as? String), (c["sig"] as? String), c["sheetIndex"].intOrNull(),
+                c["pinned"].bool(), (c["sheetName"] as? String), (c["sig"] as? String), c["sheetIndex"].intOrNull(), (c["fmt"] as? String),
             )
         }
         for (r in o["rows"].arr().orEmpty().mapNotNull { it.obj() }) {

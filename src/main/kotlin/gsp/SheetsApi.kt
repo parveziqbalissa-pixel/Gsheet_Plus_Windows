@@ -93,6 +93,7 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
         val values = raw["values"].arr().orEmpty().map { it.arr().orEmpty() }
         val formulas = typed["values"].arr().orEmpty().map { row -> row.arr().orEmpty().map { it.text() } }
         val dates = HashSet<Int>()
+        val times = HashSet<Int>()
         val validations = HashMap<Int, SheetValidation>()
         runCatching {
             // Look at the first 100 data rows: the first filled cell of a column shows its date format or dropdown.
@@ -119,8 +120,10 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
                     } else if (kind == "ONE_OF_LIST") {
                         val items = cond?.get("values").arr().orEmpty().map { it.obj()?.get("userEnteredValue").text() }.filter { it.isNotEmpty() }
                         if (items.isNotEmpty()) { validations[c] = SheetValidation(false, items); seen += c }
-                    } else if (filled && (nf == "DATE" || nf == "DATE_TIME")) {
+                    } else if (nf == "DATE" || nf == "DATE_TIME") {
                         dates += c; seen += c
+                    } else if (nf == "TIME") {
+                        times += c; seen += c
                     }
                 }
             }
@@ -129,7 +132,7 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
         return SheetRead(
             if (values.isEmpty()) listOf(emptyList()) else values,
             if (formulas.isEmpty()) listOf(emptyList()) else formulas,
-            dates, validations, size.first, size.second,
+            dates, validations, size.first, size.second, times,
         )
     }
 
@@ -196,6 +199,20 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
         }
         for (c in ops.deleteColumns.sortedDescending()) {
             requests += mapOf("deleteDimension" to mapOf("range" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "startIndex" to c, "endIndex" to c + 1)))
+        }
+        for ((c, kind) in ops.formats) {
+            val format = when (kind) {
+                "DATE" -> mapOf("numberFormat" to mapOf("type" to "DATE", "pattern" to "yyyy-mm-dd"))
+                "TIME" -> mapOf("numberFormat" to mapOf("type" to "TIME", "pattern" to "hh:mm"))
+                else -> emptyMap()
+            }
+            requests += mapOf(
+                "repeatCell" to mapOf(
+                    "range" to mapOf("sheetId" to sheetId, "startRowIndex" to 1, "startColumnIndex" to c, "endColumnIndex" to c + 1),
+                    "cell" to mapOf("userEnteredFormat" to format),
+                    "fields" to "userEnteredFormat.numberFormat",
+                ),
+            )
         }
         for ((from, destination) in ops.moveColumns) {
             requests += mapOf(
