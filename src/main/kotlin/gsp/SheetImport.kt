@@ -21,6 +21,15 @@ class ImportPlan(val columns: List<PlanColumn>, val rows: List<SourceRow>)
 /** Turns raw Google Sheets values into columns with guessed types, and converts cells to table values. */
 object SheetImport {
 
+    private val DATE_TEXT = Regex("""^(\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}|\d{1,2} [A-Za-z]{3,9},? \d{2,4}|[A-Za-z]{3,9} \d{1,2},? \d{2,4}|[A-Za-z]{3},? \d{1,2} [A-Za-z]{3,9},? \d{2,4})( \d{1,2}:\d{2}.*)?$""")
+    private val TIME_TEXT = Regex("""^\d{1,2}:\d{2}(:\d{2})?( ?[AaPp][Mm])?$""")
+
+    /** True when the Sheet shows a number as a date, e.g. "2026-11-03", "11/3/2026" or "3 Nov 2026". */
+    fun looksLikeDate(shown: String) = DATE_TEXT.matches(shown.trim())
+
+    /** True when the Sheet shows a number as a time of day, e.g. "08:49" or "8:49 AM". */
+    fun looksLikeTime(shown: String) = TIME_TEXT.matches(shown.trim())
+
     /** Row 1 of [values] is taken as the header. [dateColumns] are columns formatted as dates in the sheet. */
     fun plan(
         values: List<List<Any?>>,

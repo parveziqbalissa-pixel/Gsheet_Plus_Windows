@@ -106,7 +106,7 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
             val sheet = grid["sheets"].arr()?.firstOrNull().obj()
             val rowData = sheet?.get("data").arr()?.firstOrNull().obj()?.get("rowData").arr().orEmpty()
             val seen = HashSet<Int>()
-            for (rd in rowData) {
+            for ((rowIndex, rd) in rowData.withIndex()) {
                 val cells = rd.obj()?.get("values").arr().orEmpty()
                 cells.forEachIndexed { c, cell ->
                     val o = cell.obj() ?: return@forEachIndexed
@@ -124,6 +124,14 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
                         dates += c; seen += c
                     } else if (nf == "TIME") {
                         times += c; seen += c
+                    } else if (filled) {
+                        // The format label can be missing or generic: what the cell shows tells as well.
+                        val shown = o["formattedValue"].text()
+                        val number = values.getOrNull(rowIndex + 1)?.getOrNull(c) is Number
+                        if (number) {
+                            if (SheetImport.looksLikeDate(shown)) { dates += c; seen += c }
+                            else if (SheetImport.looksLikeTime(shown)) { times += c; seen += c }
+                        }
                     }
                 }
             }

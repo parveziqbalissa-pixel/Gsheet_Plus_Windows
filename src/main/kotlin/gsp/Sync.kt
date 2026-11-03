@@ -47,11 +47,12 @@ fun dateTimeText(v: String, type: ColumnType): String {
     return SheetImport.convert(n, type).ifEmpty { v }
 }
 
-class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int, val columnMoves: Int = 0, val orderFromSheet: Boolean = false) {
+class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int, val columnMoves: Int = 0, val orderFromSheet: Boolean = false, val notes: List<String> = emptyList()) {
     fun message(): String = "Synced: $pulled from the Sheet, $pushed sent" +
         (if (conflicts > 0) ", $conflicts conflict(s) (see Sync history)" else "") +
         (if (columnMoves > 0) ", column order sent to the Sheet ($columnMoves move(s))" else "") +
-        (if (orderFromSheet) ", column order taken from the Sheet" else "")
+        (if (orderFromSheet) ", column order taken from the Sheet" else "") +
+        (if (notes.isNotEmpty()) ". " + notes.joinToString("; ") else "")
 }
 
 /** Text to write into a sheet cell so Google keeps it as typed (no number, date or formula guessing for text columns). */
@@ -87,6 +88,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
         val tombstonesAtPlan = HashSet<String>()
         val columnTombstonesAtPlan = HashSet<String>()
         var orderFromSheet = false
+        val typeNotes = ArrayList<String>()
         var pushed = 0
         var pulled = 0
 
@@ -232,6 +234,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                                 row.base?.get(col.id)?.let { v -> row.base!![col.id] = dateTimeText(v, newType) }
                             }
                             col.type = newType
+                            typeNotes += col.name + " is now a " + newType.label + " column"
                         }
                         col.fmt = sheetKind
                     } else if (sheetKind == "" && col.fmt == null && appKind != "") {
@@ -422,6 +425,6 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             table.rows.addAll(sorted)
             table.link?.lastSyncedAt = System.currentTimeMillis()
         }
-        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet)
+        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet, typeNotes)
     }
 }
