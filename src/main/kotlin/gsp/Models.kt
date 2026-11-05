@@ -101,6 +101,8 @@ data class GridRow(
     val values: Map<Long, String>,
     val color: Int? = null,
     val reminderAt: Long? = null,
+    /** The row's number in the linked Google Sheet (1 = header row); null for rows not in the Sheet yet. */
+    val sheetRow: Int? = null,
 )
 
 data class GridData(

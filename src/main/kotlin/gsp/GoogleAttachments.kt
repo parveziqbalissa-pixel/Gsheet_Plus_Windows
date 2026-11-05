@@ -78,7 +78,7 @@ class GoogleAttachments(private val auth: GoogleAuth, private val api: SheetsApi
         val quoted = "'" + tabTitle.replace("'", "''") + "'"
         for (chunk in columns.chunked(20)) {
             val ranges = chunk.joinToString("&") { "ranges=" + enc("$quoted!${colLetter(it)}2:${colLetter(it)}") }
-            val fields = enc("sheets(data(startRow,rowData(values(formattedValue,hyperlink,textFormatRuns))))")
+            val fields = enc("sheets(data(startRow,rowData(values(formattedValue,hyperlink,textFormatRuns,chipRuns))))")
             val json = api.call("GET", "$SHEETS/${enc(spreadsheetId)}?$ranges&includeGridData=true&fields=$fields", null)
             val data = json["sheets"].arr()?.firstOrNull().obj()?.get("data").arr().orEmpty()
             data.forEachIndexed { i, d ->
@@ -93,12 +93,19 @@ class GoogleAttachments(private val auth: GoogleAuth, private val api: SheetsApi
                         ((run["startIndex"] as? Number)?.toInt() ?: 0) to run["format"].obj()?.get("link").obj()?.get("uri").text()
                     }
                     val whole = cell["hyperlink"].text()
+                    // Files attached in Google Sheets as smart chips (Insert > Drive file) keep their link in chipRuns.
+                    val chips = cell["chipRuns"].arr().orEmpty().mapNotNull { it.obj() }.mapNotNull { run ->
+                        val uri = run["chip"].obj()?.get("richLinkProperties").obj()?.get("uri").text()
+                        if (uri.isEmpty()) null else ((run["startIndex"] as? Number)?.toInt() ?: 0) to uri
+                    }
                     val entries = ArrayList<Pair<String, String>>()
                     var offset = 0
                     for (line in text.split("\n")) {
-                        val uri = runs.filter { it.first <= offset }.maxByOrNull { it.first }?.second?.ifEmpty { null }
+                        val chipUri = chips.firstOrNull { it.first >= offset && it.first <= offset + line.length }?.second
+                        val uri = chipUri ?: runs.filter { it.first <= offset }.maxByOrNull { it.first }?.second?.ifEmpty { null }
                             ?: (if (runs.isEmpty() && !text.contains("\n")) whole.ifEmpty { null } else null)
-                        if (uri != null && line.trim().isNotEmpty()) entries += line.trim() to uri
+                        val shown = line.trim().trim('@').trim()
+                        if (uri != null && line.trim().isNotEmpty()) entries += (if (chipUri != null && shown.isEmpty()) "Drive file" else line.trim()) to uri
                         offset += line.length + 1
                     }
                     if (entries.isNotEmpty()) result[(startRow + r) to column] = entries

@@ -21,6 +21,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.HorizontalScrollbar
+import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -149,6 +154,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     val liveWidths = remember { mutableStateMapOf<Long, Int>() }
     val aggregates = remember { mutableStateMapOf<Long, Aggregate>() }
     val hs = rememberScrollState()
+    val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
     var clip by remember { mutableStateOf(CellClipboard.current.value) }
     DisposableEffect(Unit) {
@@ -307,6 +313,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             onRowColor = { colorRow = row.id },
             onDeleteRow = { c.deleteRow(tableId, row.id) },
             onOpenAttachments = { col -> attachTarget = row.id to col },
+            sheetLink = link?.url,
             onToggleList = { colId, value -> commit(row.id, colId, value) },
         )
     }
@@ -532,7 +539,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
                         }
                     }
                 }
-                LazyColumn(Modifier.weight(1f).width(totalWidth)) {
+                LazyColumn(Modifier.weight(1f).width(totalWidth), state = listState) {
                     if (shown.rows.isEmpty()) {
                         item { Text(if (grid.rows.isEmpty()) "No rows yet. Click \"+ Row\"." else "No rows match.", modifier = Modifier.padding(16.dp)) }
                     }
@@ -587,6 +594,16 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
                     }
                 }
             }
+            VerticalScrollbar(
+                rememberScrollbarAdapter(listState),
+                Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(bottom = 14.dp),
+                style = LocalScrollbarStyle.current.copy(thickness = 12.dp),
+            )
+            HorizontalScrollbar(
+                rememberScrollbarAdapter(hs),
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(end = 14.dp),
+                style = LocalScrollbarStyle.current.copy(thickness = 12.dp),
+            )
         }
 
         }
@@ -797,6 +814,7 @@ private fun DataRow(
     onMenuCopy: () -> Unit, onMenuPaste: () -> Unit, onMenuClear: () -> Unit, onMenuEdit: (Long) -> Unit,
     onRowSelect: () -> Unit, onOpenRow: () -> Unit, paint: RulePaint, onCopyRow: () -> Unit, onPasteRows: () -> Unit, onRowColor: () -> Unit, onDeleteRow: () -> Unit,
     onOpenAttachments: (GridColumn) -> Unit, onToggleList: (Long, String) -> Unit,
+    sheetLink: String? = null,
 ) {
     var rowMenu by remember { mutableStateOf(false) }
     val surface = MaterialTheme.colorScheme.surface
@@ -812,6 +830,15 @@ private fun DataRow(
         ) {
             Text(number.toString(), style = MaterialTheme.typography.labelMedium, color = if (row.color != null) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant)
             DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
+                if (row.sheetRow != null) {
+                    DropdownMenuItem(text = { Text("This is row ${row.sheetRow} in the Google Sheet") }, enabled = false, onClick = {})
+                    if (sheetLink != null) {
+                        DropdownMenuItem(
+                            text = { Text("Show this row in Google Sheets") },
+                            onClick = { rowMenu = false; runCatching { Desktop.getDesktop().browse(URI(sheetLink + "&range=A" + row.sheetRow)) } },
+                        )
+                    }
+                }
                 DropdownMenuItem(text = { Text("Open row page") }, onClick = { rowMenu = false; onOpenRow() })
                 DropdownMenuItem(text = { Text("Copy row") }, onClick = { rowMenu = false; onCopyRow() })
                 DropdownMenuItem(text = { Text("Paste as new row") }, enabled = CellClipboard.resolve() != null, onClick = { rowMenu = false; onPasteRows() })

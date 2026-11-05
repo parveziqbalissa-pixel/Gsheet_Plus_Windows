@@ -113,7 +113,7 @@ class TableData(val id: Long, var name: String) {
         val gridRows = rows.map { row ->
             val values = HashMap(row.values)
             applyCalculatedColumns(cols, values)
-            GridRow(row.id, values, row.color)
+            GridRow(row.id, values, row.color, sheetRow = row.sourceRow)
         }
         return GridData(id, name, cols, gridRows)
     }
