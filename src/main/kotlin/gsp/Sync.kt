@@ -16,6 +16,8 @@ class SheetRead(
     val gridColumns: Int,
     /** Columns formatted as times in the Sheet. */
     val timeColumns: Set<Int> = emptySet(),
+    /** Column types the apps wrote into the header cell's note ("FILE", "AUDIO", "PICTURE", "SIGNATURE"). */
+    val columnTypes: Map<Int, String> = emptyMap(),
 )
 
 /** Changes to make in the sheet. Row and column numbers are 0-based; row 0 is the header. */
@@ -173,7 +175,11 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                 for (i in toCreate) {
                     val p = plan.columns.getOrNull(i) ?: continue
                     // A column with a "<name> preview" column next to it holds pictures.
-                    val kind = if (p.type == ColumnType.TEXT && header.contains(previewHeader(p.name))) ColumnType.PICTURE else p.type
+                    val noted = when (read.columnTypes[i]) {
+                        "FILE" -> ColumnType.FILE; "AUDIO" -> ColumnType.AUDIO; "PICTURE" -> ColumnType.PICTURE
+                        "SIGNATURE" -> ColumnType.SIGNATURE; else -> null
+                    }
+                    val kind = noted ?: if (p.type == ColumnType.TEXT && header.contains(previewHeader(p.name))) ColumnType.PICTURE else p.type
                     val col = Col(
                         table.newId(), p.name, kind, readOnly = p.readOnly, listItems = p.listItems,
                         sheetName = header[i],
@@ -218,27 +224,46 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                     if (table.columns.map { it.id } != before) orderFromSheet = true
                 }
             }
-            // Date and time columns: the Sheet's number format and the app's column type follow each other.
+            // Date, time, file, audio, picture and signature columns: the type is kept in the Sheet (number format or header note)
+            // and the app's column type follows it.
+            fun kindToType(kind: String): ColumnType? = when (kind) {
+                "DATE" -> ColumnType.DATE; "TIME" -> ColumnType.TIME; "FILE" -> ColumnType.FILE
+                "AUDIO" -> ColumnType.AUDIO; "PICTURE" -> ColumnType.PICTURE; "SIGNATURE" -> ColumnType.SIGNATURE
+                else -> null
+            }
+            val switchable = setOf(
+                ColumnType.TEXT, ColumnType.NUMBER, ColumnType.DATE, ColumnType.TIME,
+                ColumnType.FILE, ColumnType.AUDIO, ColumnType.PICTURE, ColumnType.SIGNATURE,
+            )
             for (col in table.columns) {
                 val idx = sheetIndex[col.id] ?: continue
-                if (col.readOnly || col.type == ColumnType.CALC || col.type.isAttachment) continue
-                val sheetKind = when (idx) { in read.dateColumns -> "DATE"; in read.timeColumns -> "TIME"; else -> "" }
-                val appKind = when (col.type) { ColumnType.DATE -> "DATE"; ColumnType.TIME -> "TIME"; else -> "" }
+                if (col.readOnly || col.type == ColumnType.CALC) continue
+                val sheetKind = when (idx) {
+                    in read.dateColumns -> "DATE"
+                    in read.timeColumns -> "TIME"
+                    else -> read.columnTypes[idx].orEmpty()
+                }
+                val appKind = when (col.type) {
+                    ColumnType.DATE, ColumnType.TIME, ColumnType.FILE, ColumnType.AUDIO, ColumnType.PICTURE, ColumnType.SIGNATURE -> col.type.name
+                    else -> ""
+                }
                 if (col.fmt != sheetKind) {
-                    // First look at this column, or the Sheet's format changed: the Sheet decides.
-                    if (sheetKind != "" && (col.type == ColumnType.TEXT || col.type == ColumnType.NUMBER || col.type == ColumnType.DATE || col.type == ColumnType.TIME)) {
-                        val newType = if (sheetKind == "DATE") ColumnType.DATE else ColumnType.TIME
+                    // First look at this column, or the Sheet changed: the Sheet decides.
+                    val newType = kindToType(sheetKind)
+                    if (newType != null && col.type in switchable) {
                         if (col.type != newType) {
-                            for (row in table.rows) {
-                                row.values[col.id]?.let { v -> row.values[col.id] = dateTimeText(v, newType) }
-                                row.base?.get(col.id)?.let { v -> row.base!![col.id] = dateTimeText(v, newType) }
+                            if (newType == ColumnType.DATE || newType == ColumnType.TIME) {
+                                for (row in table.rows) {
+                                    row.values[col.id]?.let { v -> row.values[col.id] = dateTimeText(v, newType) }
+                                    row.base?.get(col.id)?.let { v -> row.base!![col.id] = dateTimeText(v, newType) }
+                                }
                             }
                             col.type = newType
                             typeNotes += col.name + " is now a " + newType.label + " column"
                         }
                         col.fmt = sheetKind
                     } else if (sheetKind == "" && col.fmt == null && appKind != "") {
-                        ops.formats[idx] = appKind      // first sync of a date/time column made in the app
+                        ops.formats[idx] = appKind      // first sync of a typed column made in the app
                         col.fmt = appKind
                     } else col.fmt = sheetKind
                 } else if (appKind != sheetKind) {

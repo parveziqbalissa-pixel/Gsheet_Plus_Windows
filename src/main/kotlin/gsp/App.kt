@@ -175,6 +175,19 @@ private fun LinkScreen(c: Controller, onBack: () -> Unit, onOpen: (Long) -> Unit
         onOpen(id)
     }
 
+    /** Links every tab as its own table and goes to the table list. */
+    fun openAll(info: SpreadsheetInfo) {
+        for (tab in info.tabs) {
+            val existing = c.ws.tableForSheet(info.id, tab.sheetId)
+            val id = existing ?: c.ws.createLinkedTable(
+                "${info.title} - ${tab.title}",
+                Link(info.id, tab.sheetId, tab.title, "https://docs.google.com/spreadsheets/d/${info.id}/edit#gid=${tab.sheetId}"),
+            )
+            c.syncNow(id)
+        }
+        onBack()
+    }
+
     fun choose(spreadsheetId: String) {
         loading = true
         c.background("Open Sheet") {
@@ -200,7 +213,8 @@ private fun LinkScreen(c: Controller, onBack: () -> Unit, onOpen: (Long) -> Unit
         } else {
             val tabs = picked
             if (tabs != null) {
-                Text("${tabs.title} has several tabs. Pick one:", style = MaterialTheme.typography.titleMedium)
+                Text("${tabs.title} has several tabs. Pick one, or open all of them:", style = MaterialTheme.typography.titleMedium)
+                Button(onClick = { openAll(tabs) }) { Text("Open all ${tabs.tabs.size} tabs (one table each)") }
                 LazyColumn(Modifier.weight(1f)) {
                     items(tabs.tabs, key = { it.sheetId }) { t ->
                         ListItem(modifier = Modifier.clickable { openTab(tabs, t) }, headlineContent = { Text(t.title) }, supportingContent = { Text("${t.rows} rows, ${t.columns} columns") })

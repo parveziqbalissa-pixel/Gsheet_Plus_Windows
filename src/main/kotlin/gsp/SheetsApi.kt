@@ -94,6 +94,7 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
         val formulas = typed["values"].arr().orEmpty().map { row -> row.arr().orEmpty().map { it.text() } }
         val dates = HashSet<Int>()
         val times = HashSet<Int>()
+        val noted = HashMap<Int, String>()
         val validations = HashMap<Int, SheetValidation>()
         runCatching {
             // Look at the first 100 data rows: the first filled cell of a column shows its date format or dropdown.
@@ -136,11 +137,21 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
                 }
             }
         }
+        runCatching {
+            // Column types the apps wrote into the header cells' notes.
+            val head = call("GET", "$base?ranges=${enc(range + "!1:1")}&includeGridData=true&fields=" + enc("sheets.data.rowData.values.note"), null)
+            val first = head["sheets"].arr()?.firstOrNull().obj()?.get("data").arr()?.firstOrNull().obj()?.get("rowData").arr()?.firstOrNull().obj()
+            first?.get("values").arr().orEmpty().forEachIndexed { c, cell ->
+                val text = cell.obj()?.get("note").text()
+                val m = Regex("Gsheet_Plus column type: (\\w+)").find(text)
+                if (m != null) noted[c] = m.groupValues[1].uppercase()
+            }
+        }
         val size = tabSize(spreadsheetId, tabTitle)
         return SheetRead(
             if (values.isEmpty()) listOf(emptyList()) else values,
             if (formulas.isEmpty()) listOf(emptyList()) else formulas,
-            dates, validations, size.first, size.second, times,
+            dates, validations, size.first, size.second, times, noted,
         )
     }
 
@@ -209,16 +220,28 @@ class SheetsApi(private val auth: GoogleAuth) : SheetsGateway {
             requests += mapOf("deleteDimension" to mapOf("range" to mapOf("sheetId" to sheetId, "dimension" to "COLUMNS", "startIndex" to c, "endIndex" to c + 1)))
         }
         for ((c, kind) in ops.formats) {
-            val format = when (kind) {
-                "DATE" -> mapOf("numberFormat" to mapOf("type" to "DATE", "pattern" to "yyyy-mm-dd"))
-                "TIME" -> mapOf("numberFormat" to mapOf("type" to "TIME", "pattern" to "hh:mm"))
-                else -> emptyMap()
+            val isNote = kind == "FILE" || kind == "AUDIO" || kind == "PICTURE" || kind == "SIGNATURE"
+            if (!isNote) {
+                val format = when (kind) {
+                    "DATE" -> mapOf("numberFormat" to mapOf("type" to "DATE", "pattern" to "yyyy-mm-dd"))
+                    "TIME" -> mapOf("numberFormat" to mapOf("type" to "TIME", "pattern" to "hh:mm"))
+                    else -> emptyMap()
+                }
+                requests += mapOf(
+                    "repeatCell" to mapOf(
+                        "range" to mapOf("sheetId" to sheetId, "startRowIndex" to 1, "startColumnIndex" to c, "endColumnIndex" to c + 1),
+                        "cell" to mapOf("userEnteredFormat" to format),
+                        "fields" to "userEnteredFormat.numberFormat",
+                    ),
+                )
             }
+            // The header cell's note records file, audio, picture and signature columns (and is cleared for other types).
+            val note = if (isNote) "Gsheet_Plus column type: $kind" else ""
             requests += mapOf(
-                "repeatCell" to mapOf(
-                    "range" to mapOf("sheetId" to sheetId, "startRowIndex" to 1, "startColumnIndex" to c, "endColumnIndex" to c + 1),
-                    "cell" to mapOf("userEnteredFormat" to format),
-                    "fields" to "userEnteredFormat.numberFormat",
+                "updateCells" to mapOf(
+                    "rows" to listOf(mapOf("values" to listOf(mapOf("note" to note)))),
+                    "fields" to "note",
+                    "start" to mapOf("sheetId" to sheetId, "rowIndex" to 0, "columnIndex" to c),
                 ),
             )
         }
