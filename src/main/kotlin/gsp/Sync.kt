@@ -91,6 +91,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
         val columnTombstonesAtPlan = HashSet<String>()
         var orderFromSheet = false
         val typeNotes = ArrayList<String>()
+        var lastRowSeen = 0
         var pushed = 0
         var pulled = 0
 
@@ -302,6 +303,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             }
             // The first free row for rows added from the app.
             var appendAt = maxOf(lastUsedRow + 1, 1)
+            lastRowSeen = lastUsedRow + 1
 
             for (r in 1 until rowCount) {
                 val cells = values[r]
@@ -392,6 +394,7 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
                     }
                 }
                 val at = appendAt++
+                lastRowSeen = at + 1
                 appendedRowIds += row.id to at
                 rowSheetIndex[row.id] = at
                 ops.cells[at to idCol] = row.uuid
@@ -450,6 +453,6 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             table.rows.addAll(sorted)
             table.link?.lastSyncedAt = System.currentTimeMillis()
         }
-        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet, typeNotes, appendAt)
+        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet, typeNotes, lastRowSeen)
     }
 }
