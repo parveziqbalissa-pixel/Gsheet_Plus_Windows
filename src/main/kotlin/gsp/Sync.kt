@@ -49,7 +49,7 @@ fun dateTimeText(v: String, type: ColumnType): String {
     return SheetImport.convert(n, type).ifEmpty { v }
 }
 
-class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int, val columnMoves: Int = 0, val orderFromSheet: Boolean = false, val notes: List<String> = emptyList()) {
+class SyncResult(val pulled: Int, val pushed: Int, val conflicts: Int, val added: Int, val removed: Int, val columnMoves: Int = 0, val orderFromSheet: Boolean = false, val notes: List<String> = emptyList(), val lastRow: Int = 0) {
     fun message(): String = "Synced: $pulled from the Sheet, $pushed sent" +
         (if (conflicts > 0) ", $conflicts conflict(s) (see Sync history)" else "") +
         (if (columnMoves > 0) ", column order sent to the Sheet ($columnMoves move(s))" else "") +
@@ -450,6 +450,6 @@ class SyncEngine(private val ws: Workspace, private val gateway: SheetsGateway) 
             table.rows.addAll(sorted)
             table.link?.lastSyncedAt = System.currentTimeMillis()
         }
-        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet, typeNotes)
+        return SyncResult(pulled, pushed, conflictsFound.size, newRows.size, deleteLocal.size, ops.moveColumns.size, orderFromSheet, typeNotes, appendAt)
     }
 }

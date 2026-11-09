@@ -214,7 +214,8 @@ class Controller(private val scope: CoroutineScope) {
                 val tab = ws.link(tableId)?.tabTitle
                 status.value = "Synced " + java.time.LocalTime.now().withNano(0) +
                     (if (tab != null) " - Sheet tab \"$tab\"" else "") +
-                    " - ${result.pushed} sent to the Sheet, ${result.pulled} received"
+                    " - ${result.pushed} sent to the Sheet, ${result.pulled} received" +
+                    (if (result.lastRow > 0) " - Sheet's last row: ${result.lastRow}" else "")
                 if (uploadError != null) say(uploadError)
                 else if (announce || result.conflicts > 0 || result.columnMoves > 0 || result.orderFromSheet || result.notes.isNotEmpty()) say(result.message())
             } catch (e: NotSignedIn) {

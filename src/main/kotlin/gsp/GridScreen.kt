@@ -411,6 +411,14 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
                             text = { Text("Open in Google Sheets") },
                             onClick = { moreMenu = false; runCatching { Desktop.getDesktop().browse(URI(link.url)) } },
                         )
+                        DropdownMenuItem(
+                            text = { Text("Show last row in Google Sheets") },
+                            onClick = {
+                                moreMenu = false
+                                val lr = Regex("Sheet's last row: (\\d+)").find(c.status.value)?.groupValues?.get(1)
+                                runCatching { Desktop.getDesktop().browse(URI(link.url + (if (lr != null) "&range=A$lr" else ""))) }
+                            },
+                        )
                     }
                 }
             }
@@ -499,7 +507,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
                         e.key == Key.DirectionRight || e.key == Key.Tab -> { move(0, 1, false); true }
                         (e.key == Key.Enter || e.key == Key.F2) && current != null -> { startEdit(current.endRow, current.endCol); true }
                         e.key == Key.Escape -> { sel = null; true }
-                        current != null && !e.isCtrlPressed && !e.isAltPressed && e.utf16CodePoint >= 32 && e.key != Key.Spacebar -> {
+                        current != null && !e.isCtrlPressed && !e.isAltPressed && e.utf16CodePoint >= 32 && isTypedCharacter(e.utf16CodePoint) && e.key != Key.Spacebar -> {
                             startEdit(current.endRow, current.endCol, String(Character.toChars(e.utf16CodePoint))); true
                         }
                         else -> false
@@ -990,3 +998,8 @@ private fun EditField(initial: String, style: TextStyle, replaceAll: Boolean, on
             },
     )
 }
+
+/** True for a real character; false for the placeholder codes that keys like Shift, F5 or Delete report. */
+internal fun isTypedCharacter(codePoint: Int): Boolean =
+    codePoint != 0xFFFF && codePoint != 127 && !Character.isISOControl(codePoint) &&
+        Character.isDefined(codePoint) && codePoint !in 0xE000..0xF8FF
