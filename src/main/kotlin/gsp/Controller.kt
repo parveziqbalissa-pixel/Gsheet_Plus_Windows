@@ -211,7 +211,10 @@ class Controller(private val scope: CoroutineScope) {
                 } catch (e: Exception) {
                     uploadError = explain(e, "Pictures and files")
                 }
-                status.value = "Synced " + java.time.LocalTime.now().withNano(0)
+                val tab = ws.link(tableId)?.tabTitle
+                status.value = "Synced " + java.time.LocalTime.now().withNano(0) +
+                    (if (tab != null) " - Sheet tab \"$tab\"" else "") +
+                    " - ${result.pushed} sent to the Sheet, ${result.pulled} received"
                 if (uploadError != null) say(uploadError)
                 else if (announce || result.conflicts > 0 || result.columnMoves > 0 || result.orderFromSheet || result.notes.isNotEmpty()) say(result.message())
             } catch (e: NotSignedIn) {
