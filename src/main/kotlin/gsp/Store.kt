@@ -46,6 +46,8 @@ class Row(
     /** The values as of the last sync (null for a row the Sheet has never seen). */
     var base: MutableMap<Long, String>? = null,
     var sourceRow: Int? = null,
+    /** Height set by dragging the row border, in dp (null = default). */
+    var height: Int? = null,
 )
 
 class Attachment(
@@ -113,7 +115,7 @@ class TableData(val id: Long, var name: String) {
         val gridRows = rows.map { row ->
             val values = HashMap(row.values)
             applyCalculatedColumns(cols, values)
-            GridRow(row.id, values, row.color, sheetRow = row.sourceRow)
+            GridRow(row.id, values, row.color, sheetRow = row.sourceRow, height = row.height)
         }
         return GridData(id, name, cols, gridRows)
     }
@@ -514,6 +516,11 @@ class Workspace(val dir: Path) {
     /** Removes the files of a deleted row for good (the undo time is over). */
     fun discardSnapshot(snapshot: RowSnapshot) {
         snapshot.attachments.mapNotNull { it.localPath }.forEach { runCatching { Files.deleteIfExists(Path.of(it)) } }
+    }
+
+    fun setRowHeight(tableId: Long, rowId: Long, height: Int?) = synchronized(lock) {
+        val table = find(tableId) ?: return@synchronized
+        table.rows.firstOrNull { it.id == rowId }?.let { it.height = height?.coerceIn(24, 600); touch(table, stamp = false) }
     }
 
     fun setRowColor(tableId: Long, rowId: Long, color: Int?) = synchronized(lock) {

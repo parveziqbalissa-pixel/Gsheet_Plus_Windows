@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -152,6 +153,7 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     var mediaPaste by remember { mutableStateOf<Triple<GridColumn, Long, PastedMedia>?>(null) }
     var moreMenu by remember { mutableStateOf(false) }
     val liveWidths = remember { mutableStateMapOf<Long, Int>() }
+    val liveHeights = remember { mutableStateMapOf<Long, Int>() }
     val aggregates = remember { mutableStateMapOf<Long, Aggregate>() }
     val hs = rememberScrollState()
     val listState = rememberLazyListState()
@@ -314,6 +316,10 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
             onDeleteRow = { c.deleteRow(tableId, row.id) },
             onOpenAttachments = { col -> attachTarget = row.id to col },
             sheetLink = link?.url,
+            rowHeightDp = liveHeights[row.id] ?: row.height,
+            onRowHeight = { h -> liveHeights[row.id] = h },
+            onRowHeightEnd = { h -> liveHeights[row.id] = h; c.ws.setRowHeight(tableId, row.id, h) },
+            onRowHeightReset = { liveHeights.remove(row.id); c.ws.setRowHeight(tableId, row.id, null) },
             onToggleList = { colId, value -> commit(row.id, colId, value) },
         )
     }
@@ -823,12 +829,18 @@ private fun DataRow(
     onRowSelect: () -> Unit, onOpenRow: () -> Unit, paint: RulePaint, onCopyRow: () -> Unit, onPasteRows: () -> Unit, onRowColor: () -> Unit, onDeleteRow: () -> Unit,
     onOpenAttachments: (GridColumn) -> Unit, onToggleList: (Long, String) -> Unit,
     sheetLink: String? = null,
+    rowHeightDp: Int? = null, onRowHeight: (Int) -> Unit = {}, onRowHeightEnd: (Int) -> Unit = {}, onRowHeightReset: () -> Unit = {},
 ) {
     var rowMenu by remember { mutableStateOf(false) }
     val surface = MaterialTheme.colorScheme.surface
     // Rows that hold pictures are taller and show the pictures, like the previews in Google Sheets.
     val hasPictures = pictureHeight > 0 && columns.any { (it.type == ColumnType.PICTURE || it.type == ColumnType.SIGNATURE) && attachmentLinks(row.values[it.id].orEmpty()).isNotEmpty() }
-    val rowHeight = if (hasPictures) pictureHeight.dp else CellHeight
+    val rowHeight = rowHeightDp?.dp ?: if (hasPictures) pictureHeight.dp else CellHeight
+    val tall = rowHeightDp != null && rowHeightDp > 48
+    var dragHeight by remember { mutableStateOf(0f) }
+    val currentH by rememberUpdatedState(rowHeightDp ?: (if (hasPictures) pictureHeight else 32))
+    val heightChange by rememberUpdatedState(onRowHeight)
+    val heightEnd by rememberUpdatedState(onRowHeightEnd)
     Row {
         Box(
             Modifier.pin(true, hs).width(RowNumberWidth).height(rowHeight).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -837,7 +849,24 @@ private fun DataRow(
             contentAlignment = Alignment.Center,
         ) {
             Text(number.toString(), style = MaterialTheme.typography.labelMedium, color = if (row.color != null) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(8.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragStart = { dragHeight = currentH.toFloat() },
+                            onDragEnd = { heightEnd(dragHeight.roundToInt()) },
+                            onDragCancel = { heightEnd(dragHeight.roundToInt()) },
+                            onVerticalDrag = { change, delta ->
+                                change.consume()
+                                dragHeight = (dragHeight + delta / density).coerceIn(24f, 600f)
+                                heightChange(dragHeight.roundToInt())
+                            },
+                        )
+                    },
+            )
             DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
+                if (rowHeightDp != null) DropdownMenuItem(text = { Text("Default row height") }, onClick = { rowMenu = false; onRowHeightReset() })
                 if (row.sheetRow != null) {
                     DropdownMenuItem(text = { Text("This is row ${row.sheetRow} in the Google Sheet") }, enabled = false, onClick = {})
                     if (sheetLink != null) {
@@ -929,10 +958,10 @@ private fun DataRow(
                         )
                     }
                     else -> Text(
-                        text = if (value.isEmpty() || !col.isNumeric) value.replace('\n', ' ') else col.prefix + value + col.suffix,
+                        text = if (value.isEmpty() || !col.isNumeric) (if (tall) value else value.replace('\n', ' ')) else col.prefix + value + col.suffix,
                         style = if (target != null) style.copy(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline)
                         else style.copy(color = if (col.locked) textColor.copy(alpha = 0.75f) else textColor),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        maxLines = if (tall) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
                 if (cellMenu == (row.id to col.id)) {

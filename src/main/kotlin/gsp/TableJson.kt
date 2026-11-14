@@ -21,7 +21,7 @@ object TableJson {
             },
             "rows" to t.rows.map {
                 linkedMapOf(
-                    "id" to it.id, "uuid" to it.uuid, "color" to it.color, "sourceRow" to it.sourceRow,
+                    "id" to it.id, "uuid" to it.uuid, "color" to it.color, "sourceRow" to it.sourceRow, "height" to it.height,
                     "values" to it.values.mapKeys { e -> e.key.toString() },
                     "base" to it.base?.mapKeys { e -> e.key.toString() },
                 )
@@ -83,7 +83,7 @@ object TableJson {
         for (r in o["rows"].arr().orEmpty().mapNotNull { it.obj() }) {
             t.rows += Row(
                 r["id"].long(), r["uuid"].text(), r["values"].idMap() ?: HashMap(), r["color"].intOrNull(),
-                r["base"].idMap(), r["sourceRow"].intOrNull(),
+                r["base"].idMap(), r["sourceRow"].intOrNull(), r["height"].intOrNull(),
             )
         }
         for (a in o["attachments"].arr().orEmpty().mapNotNull { it.obj() }) {
