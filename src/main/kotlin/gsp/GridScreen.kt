@@ -57,6 +57,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -835,7 +836,9 @@ private fun DataRow(
     val surface = MaterialTheme.colorScheme.surface
     // Rows that hold pictures are taller and show the pictures, like the previews in Google Sheets.
     val hasPictures = pictureHeight > 0 && columns.any { (it.type == ColumnType.PICTURE || it.type == ColumnType.SIGNATURE) && attachmentLinks(row.values[it.id].orEmpty()).isNotEmpty() }
-    val rowHeight = rowHeightDp?.dp ?: if (hasPictures) pictureHeight.dp else CellHeight
+    val growForEdit = editing?.first == row.id &&
+        (row.values[editing.second].orEmpty().let { it.contains('\n') || it.length > 24 })
+    val rowHeight = (rowHeightDp?.dp ?: if (hasPictures) pictureHeight.dp else CellHeight).let { if (growForEdit && it < 96.dp) 96.dp else it }
     val tall = rowHeightDp != null && rowHeightDp > 48
     var dragHeight by remember { mutableStateOf(0f) }
     val currentH by rememberUpdatedState(rowHeightDp ?: (if (hasPictures) pictureHeight else 32))
@@ -1008,7 +1011,7 @@ private fun EditField(initial: String, style: TextStyle, replaceAll: Boolean, on
     BasicTextField(
         value = text,
         onValueChange = { text = it },
-        singleLine = true,
+        singleLine = false,
         textStyle = style,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         modifier = Modifier.fillMaxWidth()
@@ -1016,7 +1019,16 @@ private fun EditField(initial: String, style: TextStyle, replaceAll: Boolean, on
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (e.key) {
-                    Key.Enter, Key.NumPadEnter, Key.Tab -> { if (!done) { done = true; onCommit(text.text) }; true }
+                    // Alt, Shift or Ctrl + Enter breaks the line inside the cell (like Google Sheets); plain Enter saves.
+                    Key.Enter, Key.NumPadEnter -> {
+                        if (e.isAltPressed || e.isShiftPressed || e.isCtrlPressed) {
+                            val s = text.selection
+                            val t = text.text.substring(0, s.min) + "\n" + text.text.substring(s.max)
+                            text = TextFieldValue(t, TextRange(s.min + 1))
+                        } else if (!done) { done = true; onCommit(text.text) }
+                        true
+                    }
+                    Key.Tab -> { if (!done) { done = true; onCommit(text.text) }; true }
                     Key.Escape -> { if (!done) { done = true; onCancel() }; true }
                     else -> false
                 }
