@@ -78,8 +78,10 @@ object Thumbs {
         cache[key]?.let { return it }
         val image: BufferedImage? = runCatching {
             val local = a.localPath?.let { File(it) }?.takeIf { it.exists() }
-            if (local != null) {
-                ImageIO.read(local)
+            // A file that is not a picture (a PDF, say) has no local preview: fall back to Google's thumbnail of it.
+            val own = if (local != null) runCatching { ImageIO.read(local) }.getOrNull() else null
+            if (own != null) {
+                own
             } else {
                 a.driveId?.let { id ->
                     val request = HttpRequest.newBuilder(URI("https://drive.google.com/thumbnail?id=$id&sz=w$max")).build()
@@ -99,8 +101,9 @@ object Thumbs {
 fun AttachmentThumb(a: Attachment, size: androidx.compose.ui.unit.Dp, picture: Boolean, onClick: (() -> Unit)? = null, fit: Boolean = false) {
     val maxPx = if (size > 120.dp) 1000 else 400
     val isImage = a.mime.startsWith("image/") || (picture && a.mime == "application/octet-stream")
+    val canPreview = isImage || a.driveId != null
     val bitmap by produceState<ImageBitmap?>(null, a.id, a.driveId, a.localPath) {
-        if (isImage) value = withContext(Dispatchers.IO) { Thumbs.load(a, maxPx) }
+        if (canPreview) value = withContext(Dispatchers.IO) { Thumbs.load(a, maxPx) }
     }
     val base = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant)
     Box(if (onClick != null) base.clickable { onClick() } else base, contentAlignment = Alignment.Center) {

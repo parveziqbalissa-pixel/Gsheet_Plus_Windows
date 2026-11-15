@@ -835,7 +835,7 @@ private fun DataRow(
     var rowMenu by remember { mutableStateOf(false) }
     val surface = MaterialTheme.colorScheme.surface
     // Rows that hold pictures are taller and show the pictures, like the previews in Google Sheets.
-    val hasPictures = pictureHeight > 0 && columns.any { (it.type == ColumnType.PICTURE || it.type == ColumnType.SIGNATURE) && attachmentLinks(row.values[it.id].orEmpty()).isNotEmpty() }
+    val hasPictures = pictureHeight > 0 && columns.any { (it.type == ColumnType.PICTURE || it.type == ColumnType.SIGNATURE || it.type == ColumnType.FILE) && attachmentLinks(row.values[it.id].orEmpty()).isNotEmpty() }
     val growForEdit = editing?.first == row.id &&
         (row.values[editing.second].orEmpty().let { it.contains('\n') || it.length > 24 })
     val rowHeight = (rowHeightDp?.dp ?: if (hasPictures) pictureHeight.dp else CellHeight).let { if (growForEdit && it < 96.dp) 96.dp else it }
@@ -930,7 +930,8 @@ private fun DataRow(
                     col.type == ColumnType.CHECKBOX && !col.locked ->
                         Checkbox(checked = value == "true", onCheckedChange = { onToggleList(col.id, if (it) "true" else "false") })
                     col.type == ColumnType.RATING -> Stars(value, !col.locked) { v -> onToggleList(col.id, v) }
-                    (col.type == ColumnType.PICTURE || col.type == ColumnType.SIGNATURE) && hasPictures && attachmentLinks(value).isNotEmpty() -> {
+                    (col.type == ColumnType.PICTURE || col.type == ColumnType.SIGNATURE || col.type == ColumnType.FILE) && hasPictures && attachmentLinks(value).isNotEmpty() &&
+                        (col.type != ColumnType.FILE || attachments.any { it.rowId == row.id && it.columnId == col.id }) -> {
                         val names = attachmentLinks(value)
                         val inCell = names.mapNotNull { n -> attachments.firstOrNull { it.rowId == row.id && it.columnId == col.id && it.name == n } }
                         val thumb = (pictureHeight - 8).coerceAtLeast(24)
@@ -940,7 +941,7 @@ private fun DataRow(
                             Modifier.fillMaxSize().combinedClickable(onClick = { onOpenAttachments(col) }),
                             horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            shownThumbs.forEach { AttachmentThumb(it, thumb.dp, picture = true) }
+                            shownThumbs.forEach { AttachmentThumb(it, thumb.dp, picture = col.type != ColumnType.FILE) }
                             if (names.size > shownThumbs.size) {
                                 Text("+${names.size - shownThumbs.size}", style = style.copy(color = MaterialTheme.colorScheme.primary))
                             }
