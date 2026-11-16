@@ -1,6 +1,8 @@
 package gsp
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -27,6 +30,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,11 +53,69 @@ private sealed interface Screen {
 @Composable
 fun App(c: Controller) {
     var screen by remember { mutableStateOf<Screen>(Screen.Tables) }
-    when (val s = screen) {
-        Screen.Tables -> TableListScreen(c, onOpen = { screen = Screen.Grid(it) }, onLink = { screen = Screen.Link }, onSettings = { screen = Screen.Settings })
-        Screen.Settings -> SettingsScreen(c, onBack = { screen = Screen.Tables })
-        Screen.Link -> LinkScreen(c, onBack = { screen = Screen.Tables }, onOpen = { screen = Screen.Grid(it) })
-        is Screen.Grid -> GridScreen(c, s.id, onBack = { screen = Screen.Tables })
+    // Tables stay open in tabs, so opening another one does not close the current one.
+    val openTabs = remember { mutableStateListOf<Long>() }
+    var tick by remember { mutableStateOf(0L) }
+    DisposableEffect(Unit) {
+        val stop = c.ws.changes.listen { tick = it }
+        onDispose { stop() }
+    }
+    val names = remember(tick) { c.ws.summaries().associate { it.id to it.name } }
+    LaunchedEffect(names) {
+        openTabs.removeAll { it !in names }
+        val current = screen
+        if (current is Screen.Grid && current.id !in names) screen = Screen.Tables
+    }
+    fun openTable(id: Long) {
+        if (id !in openTabs) openTabs.add(id)
+        screen = Screen.Grid(id)
+    }
+    fun closeTab(id: Long) {
+        val index = openTabs.indexOf(id)
+        openTabs.remove(id)
+        val current = screen
+        if (current is Screen.Grid && current.id == id) {
+            screen = openTabs.getOrNull((index - 1).coerceAtLeast(0))?.let { Screen.Grid(it) } ?: Screen.Tables
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        if (openTabs.isNotEmpty()) {
+            val current = (screen as? Screen.Grid)?.id
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Tables", fontWeight = if (current == null) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.clickable { screen = Screen.Tables }
+                        .background(if (current == null) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                openTabs.toList().forEach { id ->
+                    val selected = id == current
+                    Row(
+                        Modifier.background(if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            names[id] ?: "...", maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.widthIn(max = 220.dp).clickable { screen = Screen.Grid(id) }.padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 6.dp),
+                        )
+                        Text("✕", modifier = Modifier.clickable { closeTab(id) }.padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 8.dp))
+                    }
+                }
+            }
+            HorizontalDivider()
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when (val s = screen) {
+                Screen.Tables -> TableListScreen(c, onOpen = ::openTable, onLink = { screen = Screen.Link }, onSettings = { screen = Screen.Settings })
+                Screen.Settings -> SettingsScreen(c, onBack = { screen = Screen.Tables })
+                Screen.Link -> LinkScreen(c, onBack = { screen = Screen.Tables }, onOpen = ::openTable)
+                is Screen.Grid -> key(s.id) { GridScreen(c, s.id, onBack = { screen = Screen.Tables }) }
+            }
+        }
     }
 }
 

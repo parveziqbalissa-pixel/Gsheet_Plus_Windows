@@ -27,21 +27,37 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
+import java.io.File
+import java.nio.file.Path
 
 object Version {
-    const val NAME = "0.22.0"
+    const val NAME = "0.24.0"
 }
 
-fun main() = application {
+fun main(args: Array<String>) {
+    val startFiles = args.filter { File(it).isFile }
+    if (!SingleInstance.claim(startFiles)) return
+    runApp(startFiles)
+}
+
+private fun runApp(startFiles: List<String>) = application {
     val appScope = rememberCoroutineScope()
     val controller = remember { Controller(appScope) }
     var visible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        if (startFiles.isNotEmpty()) controller.incoming.value = startFiles.map { Path.of(it) }
+        SingleInstance.listen { files ->
+            if (files.isNotEmpty()) controller.incoming.value = files.map { Path.of(it) }
+            visible = true
+        }
+    }
     Tray(
         icon = painterResource("icon.png"),
         tooltip = "Gsheet_Plus",
         onAction = { visible = true },
         menu = {
             Item("Quick add row", onClick = { controller.quickAdd.value = true })
+            Item("Add to Windows \"Send to\" menu", onClick = { controller.say(installSendToShortcut()); visible = true })
             Item("Open Gsheet_Plus", onClick = { visible = true })
             Item("Exit", onClick = ::exitApplication)
         },
@@ -77,6 +93,7 @@ fun main() = application {
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         if (controller.locked.value) LockScreen(controller) else App(controller)
+                        if (!controller.locked.value) SendToDialog(controller)
                     }
                     val toast = controller.toast.value
                     if (toast != null) {

@@ -2,6 +2,7 @@ package gsp
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
@@ -158,6 +159,17 @@ fun GridScreen(c: Controller, tableId: Long, onBack: () -> Unit) {
     val aggregates = remember { mutableStateMapOf<Long, Aggregate>() }
     val hs = rememberScrollState()
     val listState = rememberLazyListState()
+    // Editing a cell near the bottom: scroll so the whole (possibly taller) edit box stays visible.
+    LaunchedEffect(editing) {
+        val rowId = editing?.first ?: return@LaunchedEffect
+        repeat(2) {
+            kotlinx.coroutines.delay(90) // let the row grow first
+            val info = listState.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.key == rowId } ?: return@LaunchedEffect
+            val overflow = item.offset + item.size - info.viewportEndOffset
+            if (overflow > 0) listState.animateScrollBy(overflow.toFloat() + 12f)
+        }
+    }
     val focus = remember { FocusRequester() }
     var clip by remember { mutableStateOf(CellClipboard.current.value) }
     DisposableEffect(Unit) {

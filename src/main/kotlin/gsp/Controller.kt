@@ -36,6 +36,8 @@ class Controller(private val scope: CoroutineScope) {
     val locked = mutableStateOf(settings.pinHash != null)
     val hasPin = mutableStateOf(settings.pinHash != null)
     val quickAdd = mutableStateOf(false)
+    /** Files sent from Windows Explorer ("Send to") that wait for the user to choose where they go. */
+    val incoming = mutableStateOf<List<java.nio.file.Path>>(emptyList())
 
     /** Set by the open table: receives files dropped on the window. */
     @Volatile
